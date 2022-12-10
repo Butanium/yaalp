@@ -1,7 +1,3 @@
-/**
- * Project Untitled
- */
-
 
 #ifndef _OBSTACLES_H
 #define _OBSTACLES_H

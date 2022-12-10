@@ -1,7 +1,3 @@
-/**
- * Project Untitled
- */
-
 
 #include "obstacles.h"
 

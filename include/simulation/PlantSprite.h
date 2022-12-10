@@ -1,7 +1,3 @@
-/**
- * Project Untitled
- */
-
 
 #ifndef _PLANTSPRITE_H
 #define _PLANTSPRITE_H

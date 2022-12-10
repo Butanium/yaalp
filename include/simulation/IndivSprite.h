@@ -1,7 +1,3 @@
-/**
- * Project Untitled
- */
-
 
 #ifndef _INDIVSPRITE_H
 #define _INDIVSPRITE_H

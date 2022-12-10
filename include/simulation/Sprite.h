@@ -1,7 +1,3 @@
-/**
- * Project Untitled
- */
-
 
 #ifndef _SPRITE_H
 #define _SPRITE_H
