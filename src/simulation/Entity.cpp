@@ -1,4 +1,3 @@
-#include "pytorch.h"
 #include "Entity.h"
 
 /**
