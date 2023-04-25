@@ -1,8 +1,12 @@
 use notan::prelude::*;
 use notan::draw::*;
+use tch::Tensor;
 
 #[notan_main]
 fn main() -> Result<(), String> {
+    let t = Tensor::of_slice(&[3, 1, 4, 1, 5]);
+    let t = t * 2;
+    t.print();
     notan::init().draw(draw)
         .add_config(DrawConfig)
         .build()
