@@ -1,15 +1,74 @@
 use tch::Tensor;
 
 #[derive(Debug)]
-struct Creature {
+pub(crate) struct Entity {
     side_length: i64,
     x: f64,
     y: f64,
     body: Tensor,
 }
+pub trait WorldObject<W> {
+    fn position(&self) -> (f64, f64);
+    fn setPosition(&mut self, x: f64, y: f64);
+    fn world_pos(&self) -> (i64, i64);
+    fn add_to_map(&self, world: &W);
+}
 
-#[derive(Debug)]
-pub(crate) struct World {
+impl<'world> WorldObject<World<'world>> for Entity {
+    fn position(&self) -> (f64, f64) {
+        (self.x, self.y)
+    }
+
+    fn setPosition(&mut self, x: f64, y: f64) {
+        self.x = x;
+        self.y = y;
+    }
+
+    fn world_pos(&self) -> (i64, i64) {
+        (self.x.round() as i64, self.y.round() as i64)
+    }
+
+    fn add_to_map(&self, world: &World<'world>) {
+        let mut view = world.get_submap(self.world_pos(), self.side_length);
+        view += &self.body;
+    }
+}
+
+pub(crate) struct Square(Entity);
+
+impl Square {
+    pub fn new(side_length: i64, world: &World) -> Self {
+        Square(Entity {
+            side_length,
+            x: 0.0,
+            y: 0.0,
+            body: Tensor::ones(
+                &[world.channels, side_length, side_length],
+                (world.val_type, world.device),
+            ),
+        })
+    }
+}
+
+impl<'world> WorldObject<World<'world>> for Square {
+    fn position(&self) -> (f64, f64) {
+        self.0.position()
+    }
+
+    fn setPosition(&mut self, x: f64, y: f64) {
+        self.0.setPosition(x, y);
+    }
+
+    fn world_pos(&self) -> (i64, i64) {
+        self.0.world_pos()
+    }
+
+    fn add_to_map(&self, world: &World) {
+        self.0.add_to_map(world)
+    }
+}
+
+pub(crate) struct World<'world> {
     map: Tensor,
     height: i64,
     width: i64,
@@ -19,25 +78,14 @@ pub(crate) struct World {
     device: tch::Device,
     val_type: tch::Kind,
     max_field_of_view: i64,
-    creatures: Vec<Creature>,
+    entities: Vec<&'world dyn WorldObject<World<'world>>>,
 }
 
-impl Creature {
-    fn position(&self) -> (f64, f64) {
-        (self.x, self.y)
+impl<'world> World<'world> {
+    pub fn add_entity(&mut self, object: &'world dyn WorldObject<World<'world>>) {
+        self.entities.push(object);
     }
 
-    fn world_pos(&self) -> (i64, i64) {
-        (self.x.round() as i64, self.y.round() as i64)
-    }
-
-    fn add_to_map(&self, world: &World) {
-        let mut view = world.get_view(self.world_pos(), self.side_length);
-        view += &self.body;
-    }
-}
-
-impl World {
     pub fn new(
         width: i64,
         height: i64,
@@ -48,8 +96,7 @@ impl World {
         device: tch::Device,
         val_type: tch::Kind,
     ) -> Self {
-        let map = Tensor::ones(
-            // todo zeros
+        let map = Tensor::zeros(
             &[
                 channels,
                 height + 2 * max_field_of_view,
@@ -77,7 +124,7 @@ impl World {
             device,
             val_type,
             max_field_of_view,
-            creatures: vec![],
+            entities: vec![],
         }
     }
 
@@ -104,7 +151,7 @@ impl World {
     /// 2 1 0
     ///
     /// which corresponds to the view of the map from the position P with a field of view of 1.
-    pub fn get_view(&self, position: (i64, i64), field_of_view: i64) -> Tensor {
+    pub fn get_observation(&self, position: (i64, i64), field_of_view: i64) -> Tensor {
         self.map
             .narrow(
                 1,
@@ -117,6 +164,11 @@ impl World {
                 2 * field_of_view + 1,
             )
     }
+    pub fn get_submap(&self, position: (i64, i64), side_lenght: i64) -> Tensor {
+        self.map
+            .narrow(1, position.1 + self.max_field_of_view, side_lenght)
+            .narrow(2, position.0 + self.max_field_of_view, side_lenght)
+    }
 
     pub fn print(&self) {
         self.map.print()
@@ -124,7 +176,7 @@ impl World {
 
     pub fn update(&mut self) {
         self.map *= &self.decays;
-        for creature in &self.creatures {
+        for creature in &self.entities {
             creature.add_to_map(self)
         }
         self.map.clamp_max_tensor_(&self.max_values); // in place operation
