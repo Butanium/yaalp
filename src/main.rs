@@ -4,7 +4,7 @@ use tch::Tensor;
 mod world;
 use crate::world::World;
 
-// #[notan_main]
+// #[notan_main] // uncomment to test notan window
 fn main() -> Result<(), String> {
     let t = Tensor::of_slice(&[3, 1, 4, 1, 5]);
     let t = t * 2;
@@ -25,16 +25,11 @@ fn main() -> Result<(), String> {
         device,
         tch::Kind::Float,
     );
-    let tensor1 = Tensor::of_slice(&[
-        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0
-    ])
-    .reshape(&[2, 2, 2]);
-    let tensor2 = Tensor::of_slice(&[2.0, 3.0]);
-    let result = &tensor1 * (&tensor2.unsqueeze(-1).unsqueeze(-1));
-    tensor1.print();
-    result.print();
+    println!("Before update:");
     map.print();
     map.update();
+    println!("After update:");
+    map.print();
     todo!()
     // notan::init().draw(draw).add_config(DrawConfig).build()
 }
