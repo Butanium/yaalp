@@ -1,36 +1,73 @@
 use tch::Tensor;
 
+#[derive(Debug, Clone, Copy)]
+pub struct Position<I> {
+    x: I,
+    y: I,
+}
+
+impl<I> From<(I, I)> for Position<I> {
+    fn from(pos: (I, I)) -> Self {
+        Position { x: pos.0, y: pos.1 }
+    }
+}
+
+impl<I> From<Position<I>> for (I, I) {
+    fn from(pos: Position<I>) -> Self {
+        (pos.x, pos.y)
+    }
+}
+
+impl<I: Copy> Position<I> {
+    pub fn new(x: I, y: I) -> Self {
+        Position { x, y }
+    }
+
+    pub fn map<F, J>(&self, f: F) -> Position<J>
+    where
+        F: Fn(I) -> J,
+    {
+        Position {
+            x: f(self.x),
+            y: f(self.y),
+        }
+    }
+}
+
 #[derive(Debug)]
 /// Represents an entity in the world.
 ///
 /// An entity has a position (x, y) and a body, which is a tensor representing its shape.
 pub(crate) struct Entity {
     side_length: i64,
-    x: f64,
-    y: f64,
+    position: Position<f64>,
     body: Tensor,
 }
 
 /// The WorldObject trait is implemented for entities that can be added to the world.
 pub trait WorldObject<W> {
-    fn position(&self) -> (f64, f64);
+    fn position(&self) -> Position<f64>;
     fn set_position(&mut self, x: f64, y: f64);
-    fn world_pos(&self) -> (i64, i64);
+    fn world_pos(&self) -> Position<i64>;
     fn add_to_map(&self, world: &W);
 }
 
 impl<'world> WorldObject<World<'world>> for Entity {
-    fn position(&self) -> (f64, f64) {
-        (self.x, self.y)
+    fn position(&self) -> Position<f64> {
+        self.position
     }
 
     fn set_position(&mut self, x: f64, y: f64) {
-        self.x = x;
-        self.y = y;
+        self.position.x = x;
+        self.position.y = y;
     }
 
-    fn world_pos(&self) -> (i64, i64) {
-        (self.x.round() as i64, self.y.round() as i64)
+    fn world_pos(&self) -> Position<i64> {
+        (
+            self.position.x.round() as i64,
+            self.position.y.round() as i64,
+        )
+            .into()
     }
 
     fn add_to_map(&self, world: &World<'world>) {
@@ -46,8 +83,7 @@ impl Square {
     pub fn new(side_length: i64, world: &World) -> Self {
         Square(Entity {
             side_length,
-            x: 0.0,
-            y: 0.0,
+            position: Position::new(0., 0.),
             body: Tensor::ones(
                 &[world.channels, side_length, side_length],
                 (world.val_type, world.device),
@@ -57,7 +93,7 @@ impl Square {
 }
 
 impl<'world> WorldObject<World<'world>> for Square {
-    fn position(&self) -> (f64, f64) {
+    fn position(&self) -> Position<f64> {
         self.0.position()
     }
 
@@ -65,7 +101,7 @@ impl<'world> WorldObject<World<'world>> for Square {
         self.0.set_position(x, y);
     }
 
-    fn world_pos(&self) -> (i64, i64) {
+    fn world_pos(&self) -> Position<i64> {
         self.0.world_pos()
     }
 
@@ -171,25 +207,25 @@ impl<'world> World<'world> {
     /// 2 1 0
     ///
     /// which corresponds to the view of the map from the position P with a field of view of 1.
-    pub fn get_observation(&self, position: (i64, i64), field_of_view: i64) -> Tensor {
+    pub fn get_observation(&self, position: Position<i64>, field_of_view: i64) -> Tensor {
         self.map
             .narrow(
                 1,
-                position.1 + self.max_field_of_view - field_of_view,
+                position.y + self.max_field_of_view - field_of_view,
                 2 * field_of_view + 1,
             )
             .narrow(
                 2,
-                position.0 + self.max_field_of_view - field_of_view,
+                position.x + self.max_field_of_view - field_of_view,
                 2 * field_of_view + 1,
             )
     }
     /// Returns a submap of which top left point is in position
     /// The returned tensor has dimensions (channels, side_length, side_length).
-    pub fn get_submap(&self, position: (i64, i64), side_lenght: i64) -> Tensor {
+    pub fn get_submap(&self, position: Position<i64>, side_lenght: i64) -> Tensor {
         self.map
-            .narrow(1, position.1 + self.max_field_of_view, side_lenght)
-            .narrow(2, position.0 + self.max_field_of_view, side_lenght)
+            .narrow(1, position.y + self.max_field_of_view, side_lenght)
+            .narrow(2, position.x + self.max_field_of_view, side_lenght)
     }
 
     pub fn print(&self) {
