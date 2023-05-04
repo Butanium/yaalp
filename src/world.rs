@@ -1,15 +1,20 @@
 use tch::Tensor;
 
 #[derive(Debug)]
+/// Represents an entity in the world.
+///
+/// An entity has a position (x, y) and a body, which is a tensor representing its shape.
 pub(crate) struct Entity {
     side_length: i64,
     x: f64,
     y: f64,
     body: Tensor,
 }
+
+/// The WorldObject trait is implemented for entities that can be added to the world.
 pub trait WorldObject<W> {
     fn position(&self) -> (f64, f64);
-    fn setPosition(&mut self, x: f64, y: f64);
+    fn set_position(&mut self, x: f64, y: f64);
     fn world_pos(&self) -> (i64, i64);
     fn add_to_map(&self, world: &W);
 }
@@ -19,7 +24,7 @@ impl<'world> WorldObject<World<'world>> for Entity {
         (self.x, self.y)
     }
 
-    fn setPosition(&mut self, x: f64, y: f64) {
+    fn set_position(&mut self, x: f64, y: f64) {
         self.x = x;
         self.y = y;
     }
@@ -34,6 +39,7 @@ impl<'world> WorldObject<World<'world>> for Entity {
     }
 }
 
+/// WorldObject example
 pub(crate) struct Square(Entity);
 
 impl Square {
@@ -55,8 +61,8 @@ impl<'world> WorldObject<World<'world>> for Square {
         self.0.position()
     }
 
-    fn setPosition(&mut self, x: f64, y: f64) {
-        self.0.setPosition(x, y);
+    fn set_position(&mut self, x: f64, y: f64) {
+        self.0.set_position(x, y);
     }
 
     fn world_pos(&self) -> (i64, i64) {
@@ -81,6 +87,20 @@ pub(crate) struct World<'world> {
     entities: Vec<&'world dyn WorldObject<World<'world>>>,
 }
 
+/// Represents the game world.
+///
+/// The world map is a 3D tensor with dimensions (channels, height + 2 * max_field_of_view, width + 2 * max_field_of_view).
+/// Each channel represents a different aspect of the world (e.g. terrain, objects, enemies, etc.).
+/// The height and width represent the size of the world, and the max_field_of_view represents the maximum distance
+/// that an entity can see in each direction.
+///
+/// The world contains entities that implement the WorldObject trait, which allows them to be added to the world and interact with it.
+/// Entities have a position (x, y) and a body, which is a tensor representing their shape.
+///
+/// The world also contains decay and max value tensors, which determine how the values in the world decay over time and what their maximum values can be.
+///
+/// The World struct provides methods for adding entities to the world, getting views of the world from a certain position,
+/// and updating the values in the world based on the decay and max value tensors.
 impl<'world> World<'world> {
     pub fn add_entity(&mut self, object: &'world dyn WorldObject<World<'world>>) {
         self.entities.push(object);
@@ -164,6 +184,8 @@ impl<'world> World<'world> {
                 2 * field_of_view + 1,
             )
     }
+    /// Returns a submap of which top left point is in position
+    /// The returned tensor has dimensions (channels, side_length, side_length).
     pub fn get_submap(&self, position: (i64, i64), side_lenght: i64) -> Tensor {
         self.map
             .narrow(1, position.1 + self.max_field_of_view, side_lenght)
@@ -174,11 +196,13 @@ impl<'world> World<'world> {
         self.map.print()
     }
 
+    /// Update the world
     pub fn update(&mut self) {
         self.map *= &self.decays;
+        // todo: update creatures
         for creature in &self.entities {
             creature.add_to_map(self)
         }
-        self.map.clamp_max_tensor_(&self.max_values); // in place operation
+        self.map.clamp_max_tensor_(&self.max_values); // in place operation, result can safely be ignored
     }
 }

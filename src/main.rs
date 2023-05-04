@@ -13,6 +13,7 @@ fn main() -> Result<(), String> {
         tch::Device::Cpu
     };
     println!("Device used: {:?}", device);
+    // Create a dummy world
     let mut world = World::new(
         3,
         3,
@@ -23,9 +24,10 @@ fn main() -> Result<(), String> {
         device,
         tch::Kind::Float,
     );
+    // Create some dummy creatures
     let square = world::Square::new(2, &world);
     let mut square2 = world::Square::new(2, &world);
-    square2.setPosition(1., 1.);
+    square2.set_position(1., 1.);
     world.add_entity(&square);
     world.add_entity(&square2);
     world.print();
