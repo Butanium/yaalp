@@ -1,9 +1,12 @@
 use notan::draw::*;
 use notan::prelude::*;
 use tch::Tensor;
+mod creature;
+mod utils;
 mod world;
 use crate::world::World;
 use crate::world::WorldObject;
+use tch::IndexOp;
 
 // #[notan_main] // uncomment to test notan window
 fn main() -> Result<(), String> {
@@ -23,6 +26,7 @@ fn main() -> Result<(), String> {
         &[10., 10.],
         device,
         tch::Kind::Float,
+        0,
     );
     // Create some dummy creatures
     let square = world::Square::new(2, &world);
