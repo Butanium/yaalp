@@ -1,38 +1,5 @@
+use crate::utils::Position;
 use tch::Tensor;
-
-#[derive(Debug, Clone, Copy)]
-pub struct Position<I> {
-    x: I,
-    y: I,
-}
-
-impl<I> From<(I, I)> for Position<I> {
-    fn from(pos: (I, I)) -> Self {
-        Position { x: pos.0, y: pos.1 }
-    }
-}
-
-impl<I> From<Position<I>> for (I, I) {
-    fn from(pos: Position<I>) -> Self {
-        (pos.x, pos.y)
-    }
-}
-
-impl<I: Copy> Position<I> {
-    pub fn new(x: I, y: I) -> Self {
-        Position { x, y }
-    }
-
-    pub fn map<F, J>(&self, f: F) -> Position<J>
-    where
-        F: Fn(I) -> J,
-    {
-        Position {
-            x: f(self.x),
-            y: f(self.y),
-        }
-    }
-}
 
 #[derive(Debug)]
 /// Represents an entity in the world.
@@ -50,6 +17,7 @@ pub trait WorldObject<W> {
     fn set_position(&mut self, x: f64, y: f64);
     fn world_pos(&self) -> Position<i64>;
     fn add_to_map(&self, world: &W);
+    fn update(&self, world: &W) {}
 }
 
 impl<'world> WorldObject<World<'world>> for Entity {
@@ -121,6 +89,7 @@ pub(crate) struct World<'world> {
     val_type: tch::Kind,
     max_field_of_view: i64,
     entities: Vec<&'world dyn WorldObject<World<'world>>>,
+    pub random: rand::rngs::StdRng,
 }
 
 /// Represents the game world.
@@ -151,6 +120,7 @@ impl<'world> World<'world> {
         max_values: &[f64],
         device: tch::Device,
         val_type: tch::Kind,
+        seed: u64,
     ) -> Self {
         let map = Tensor::zeros(
             &[
@@ -181,6 +151,7 @@ impl<'world> World<'world> {
             val_type,
             max_field_of_view,
             entities: vec![],
+            random: rand::SeedableRng::seed_from_u64(seed),
         }
     }
 
@@ -234,10 +205,12 @@ impl<'world> World<'world> {
 
     /// Update the world
     pub fn update(&mut self) {
+        for entity in &self.entities {
+            entity.update(self)
+        }
         self.map *= &self.decays;
-        // todo: update creatures
-        for creature in &self.entities {
-            creature.add_to_map(self)
+        for entity in &self.entities {
+            entity.add_to_map(self)
         }
         self.map.clamp_max_tensor_(&self.max_values); // in place operation, result can safely be ignored
     }
