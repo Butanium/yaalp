@@ -99,3 +99,10 @@ pub fn sample_index(weights: &Tensor) -> i64 {
     let indices = weights.multinomial(1, true);
     indices.int64_value(&[0])
 }
+
+pub trait EnumFromRepr
+where
+    Self: Sized,
+{
+    fn from_repr(discriminant: usize) -> Option<Self>;
+}
