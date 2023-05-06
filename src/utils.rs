@@ -1,3 +1,5 @@
+use tch::Tensor;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Position<I> {
     pub x: I,
@@ -20,6 +22,16 @@ impl<I: std::ops::Mul<Output = I> + Copy> std::ops::Mul<I> for Position<I> {
         Position {
             x: self.x * rhs,
             y: self.y * rhs,
+        }
+    }
+}
+
+impl<I: std::ops::Add<Output = I> + Copy> std::ops::Add<I> for Position<I> {
+    type Output = Position<I>;
+    fn add(self, rhs: I) -> Self::Output {
+        Position {
+            x: self.x + rhs,
+            y: self.y + rhs,
         }
     }
 }
@@ -70,8 +82,20 @@ impl Position<f64> {
             y: self.y,
         } / norm
     }
+
+    pub fn round(&self) -> Position<i64> {
+        Position {
+            x: self.x.round() as i64,
+            y: self.y.round() as i64,
+        }
+    }
 }
 
 pub fn sigmoid(x: f64) -> f64 {
     1. / (1. + (-x).exp())
+}
+
+pub fn sample_index(weights: &Tensor) -> i64 {
+    let indices = weights.multinomial(1, true);
+    indices.int64_value(&[0])
 }
