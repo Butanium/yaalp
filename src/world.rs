@@ -11,13 +11,23 @@ pub(crate) struct Entity {
     body: Tensor,
 }
 
+impl Entity {
+    pub fn new(side_length: i64, body: Tensor) -> Self {
+        Entity {
+            side_length,
+            position: Position::new(0., 0.),
+            body,
+        }
+    }
+}
+
 /// The WorldObject trait is implemented for entities that can be added to the world.
 pub trait WorldObject<W> {
     fn position(&self) -> Position<f64>;
     fn set_position(&mut self, x: f64, y: f64);
     fn world_pos(&self) -> Position<i64>;
     fn add_to_map(&self, world: &W);
-    fn update(&self, world: &W) {}
+    fn update(&self, world: &mut W) {}
 }
 
 impl<'world> WorldObject<World<'world>> for Entity {
@@ -31,11 +41,7 @@ impl<'world> WorldObject<World<'world>> for Entity {
     }
 
     fn world_pos(&self) -> Position<i64> {
-        (
-            self.position.x.round() as i64,
-            self.position.y.round() as i64,
-        )
-            .into()
+        self.position.round()
     }
 
     fn add_to_map(&self, world: &World<'world>) {
@@ -45,36 +51,40 @@ impl<'world> WorldObject<World<'world>> for Entity {
 }
 
 /// WorldObject example
-pub(crate) struct Square(Entity);
+pub(crate) struct Square {
+    pub entity: Entity,
+}
 
 impl Square {
     pub fn new(side_length: i64, world: &World) -> Self {
-        Square(Entity {
-            side_length,
-            position: Position::new(0., 0.),
-            body: Tensor::ones(
-                &[world.channels, side_length, side_length],
-                (world.val_type, world.device),
-            ),
-        })
+        Square {
+            entity: Entity {
+                side_length,
+                position: Position::new(0., 0.),
+                body: Tensor::ones(
+                    &[world.channels, side_length, side_length],
+                    (world.val_type, world.device),
+                ),
+            },
+        }
     }
 }
 
 impl<'world> WorldObject<World<'world>> for Square {
     fn position(&self) -> Position<f64> {
-        self.0.position()
+        self.entity.position()
     }
 
     fn set_position(&mut self, x: f64, y: f64) {
-        self.0.set_position(x, y);
+        self.entity.set_position(x, y);
     }
 
     fn world_pos(&self) -> Position<i64> {
-        self.0.world_pos()
+        self.entity.world_pos()
     }
 
     fn add_to_map(&self, world: &World) {
-        self.0.add_to_map(world)
+        self.entity.add_to_map(world)
     }
 }
 
@@ -82,13 +92,13 @@ pub(crate) struct World<'world> {
     map: Tensor,
     height: i64,
     width: i64,
-    channels: i64,
+    pub channels: i64,
     decays: Tensor,
     max_values: Tensor,
-    device: tch::Device,
+    pub device: tch::Device,
     val_type: tch::Kind,
     max_field_of_view: i64,
-    entities: Vec<&'world dyn WorldObject<World<'world>>>,
+    objects: Vec<&'world dyn WorldObject<World<'world>>>,
     pub random: rand::rngs::StdRng,
 }
 
@@ -108,7 +118,7 @@ pub(crate) struct World<'world> {
 /// and updating the values in the world based on the decay and max value tensors.
 impl<'world> World<'world> {
     pub fn add_entity(&mut self, object: &'world dyn WorldObject<World<'world>>) {
-        self.entities.push(object);
+        self.objects.push(object);
     }
 
     pub fn new(
@@ -129,7 +139,9 @@ impl<'world> World<'world> {
                 width + 2 * max_field_of_view,
             ],
             (val_type, device),
-        );
+        )
+        .requires_grad_(false);
+        tch::manual_seed(seed as i64);
         assert_eq!(decays.len() as i64, channels);
         assert_eq!(max_values.len() as i64, channels);
         World {
@@ -150,7 +162,7 @@ impl<'world> World<'world> {
             device,
             val_type,
             max_field_of_view,
-            entities: vec![],
+            objects: vec![],
             random: rand::SeedableRng::seed_from_u64(seed),
         }
     }
@@ -205,13 +217,18 @@ impl<'world> World<'world> {
 
     /// Update the world
     pub fn update(&mut self) {
-        for entity in &self.entities {
-            entity.update(self)
+        let objects = self.objects.clone(); // To allow to pass a mutable ref of world in objects update
+                                            // Update worldObjects
+        for object in objects {
+            object.update(self)
         }
+        // Decay
         self.map *= &self.decays;
-        for entity in &self.entities {
-            entity.add_to_map(self)
+        // Add objects to map
+        for object in &self.objects {
+            object.add_to_map(self)
         }
+        // Clamp max values
         self.map.clamp_max_tensor_(&self.max_values); // in place operation, result can safely be ignored
     }
 }
