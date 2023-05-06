@@ -1,23 +1,45 @@
+use std::os::linux::raw;
+
+use crate::constants;
 use crate::utils;
 use crate::world;
+use rand::rngs::StdRng;
 use rand::Rng;
+use strum_macros::{EnumCount, FromRepr};
+use tch::Device;
 use tch::IndexOp;
+use tch::Shape;
 use tch::{Kind, Tensor};
 use utils::Position;
 use world::World;
 use world::WorldObject;
 
-trait Brain<Input, Output> {
-    fn evaluate(&self, input: Input, world: &mut World) -> Output;
+trait EnumFromRepr
+where
+    Self: Sized,
+{
+    fn from_repr(discriminant: usize) -> Option<Self>;
 }
 
-#[derive(Debug, Clone, Copy)]
+pub trait RandomInit<W> {
+    fn new_random(world: &mut W) -> Self;
+}
+
+trait Brain<Input, Output> {
+    fn evaluate(&self, input: Input, random: &mut StdRng) -> Output;
+}
+
+#[derive(FromRepr, EnumCount, Debug, Clone, Copy)]
 enum PenaltyType {
     Linear,
     Quadratic,
     Exponential,
 }
-
+impl EnumFromRepr for PenaltyType {
+    fn from_repr(discriminant: usize) -> Option<Self> {
+        PenaltyType::from_repr(discriminant)
+    }
+}
 #[derive(Debug, Clone, Copy)]
 struct DistancePenalty {
     weight: f64,
@@ -27,9 +49,9 @@ struct DistancePenalty {
 impl DistancePenalty {
     fn compute_penalty(self, dist: &Tensor) -> Tensor {
         match self.ptype {
-            PenaltyType::Linear => 1. / (1. + self.weight * dist),
-            PenaltyType::Quadratic => 1. / (1. + self.weight * dist.square()),
-            PenaltyType::Exponential => 1. / (1. + self.weight * dist.exp()),
+            PenaltyType::Linear => 1. / (1. + self.weight.max(0.) * dist),
+            PenaltyType::Quadratic => 1. / (1. + self.weight.max(0.) * dist.square()),
+            PenaltyType::Exponential => 1. / (1. + self.weight.max(0.) * dist.exp()),
         }
     }
 
@@ -86,33 +108,66 @@ impl DistancePenalty {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 enum YaalAction {
     Attack,
     Reproduce,
     Nop,
 }
 
+#[derive(FromRepr, EnumCount, Debug, Clone, Copy)]
+enum DecisionSampling {
+    Softmax,
+    Argmax,
+    Sample,
+}
+
+impl EnumFromRepr for DecisionSampling {
+    fn from_repr(discriminant: usize) -> Option<Self> {
+        DecisionSampling::from_repr(discriminant)
+    }
+}
+
+impl DecisionSampling {
+    /// Sample an index with weighted probabilities
+    /// rand must be in range [0,1]
+    fn logits_to_index(self, logits: &Tensor) -> i64 {
+        let n = logits.size()[0];
+        match self {
+            DecisionSampling::Argmax => logits.argmax(0, false).into(),
+            DecisionSampling::Softmax => utils::sample_index(&logits.softmax(0, Kind::Float)),
+            DecisionSampling::Sample => {
+                let weights = logits - logits.min() + 1e-6;
+                utils::sample_index(&weights)
+            }
+        }
+    }
+}
+impl YaalAction {
+    const NB_ACTIONS: i64 = 3;
+    fn from_index(index: i64) -> YaalAction {
+        match index {
+            0 => YaalAction::Attack,
+            1 => YaalAction::Reproduce,
+            2 => YaalAction::Nop,
+            _ => panic!("Invalid action index"),
+        }
+    }
+}
+
 struct YaalVectorBrain {
     device: tch::Device,
+    /// Tensor of shape [world_channels]
     direction_weights: Tensor,
+    /// Tensor of shape [world_channels]
     speed_weights: Tensor,
+    /// Tensor of shape [world_channels, nb_actionss]
     decision_weights: Tensor,
+    decision_sampling: DecisionSampling,
     direction_distance_penalty: DistancePenalty,
     speed_distance_penalty: DistancePenalty,
     decision_distance_penalty: DistancePenalty,
     rand_direction_norm: f64,
-}
-
-struct YaalGenome {
-    brain: YaalVectorBrain,
-    max_speed: f64,
-    field_of_view: i64,
-}
-
-struct YaalDecision {
-    action: YaalAction,
-    direction: Position<f64>,
-    speed_factor: f64,
 }
 
 impl YaalVectorBrain {
@@ -120,11 +175,11 @@ impl YaalVectorBrain {
         &self,
         input_view: &Tensor,
         rand_norm: f64,
-        world: &mut World,
+        random: &mut StdRng,
     ) -> Position<f64> {
         let dist_mask = self
             .direction_distance_penalty
-            .get_mask(self.device, input_view.size()[1]);
+            .get_direction_mask(self.device, input_view.size()[1]);
         let mut eval = input_view.matmul(&self.direction_weights);
         eval *= dist_mask;
         // Compute the average direction vector weighted by eval
@@ -143,26 +198,35 @@ impl YaalVectorBrain {
         let y = &xy[1];
         let dir_x = ((x * &eval) - center).mean(Kind::Float);
         let dir_y = ((y * &eval) - center).mean(Kind::Float);
-        let rand_dir = Position::<f64>::new(
-            world.random.gen_range(0. ..1.),
-            world.random.gen_range(0. ..1.),
-        )
-        .normalize()
+        let rand_dir = Position::<f64>::new(random.gen_range(0. ..1.), random.gen_range(0. ..1.))
+            .normalize()
             * rand_norm;
-        (Position::new(dir_x.into(), dir_y.into()) + rand_dir).normalize()
+        let raw_dir: Position<f64> = Position::<f64>::new(dir_x.into(), dir_y.into()) + rand_dir;
+        raw_dir.normalize()
     }
 
     fn get_action(&self, input_view: &Tensor) -> YaalAction {
-        todo!("Implement get_action")
+        let mask = self
+            .decision_distance_penalty
+            .get_mask(self.device, input_view.size()[1]);
+        let mut eval = input_view.matmul(&self.decision_weights);
+        eval *= mask;
+        let logits = eval.mean_dim(Some([1, 2].as_slice()), false, Kind::Float);
+        YaalAction::from_index(self.decision_sampling.logits_to_index(&logits))
     }
 
     fn get_speed_factor(&self, input_view: &Tensor) -> f64 {
-        todo!("Implement get_speed_factor")
+        let mask = self
+            .speed_distance_penalty
+            .get_mask(self.device, input_view.size()[1]);
+        let mut eval = input_view.matmul(&self.speed_weights);
+        eval *= mask;
+        utils::sigmoid(eval.mean(Kind::Float).into())
     }
 }
 impl Brain<Tensor, YaalDecision> for YaalVectorBrain {
-    fn evaluate(&self, input_view: Tensor, world: &mut World) -> YaalDecision {
-        let direction = self.get_direction(&input_view, self.rand_direction_norm, world);
+    fn evaluate(&self, input_view: Tensor, random: &mut StdRng) -> YaalDecision {
+        let direction = self.get_direction(&input_view, self.rand_direction_norm, random);
         let action = self.get_action(&input_view);
         let speed_factor = self.get_speed_factor(&input_view);
         YaalDecision {
@@ -172,18 +236,121 @@ impl Brain<Tensor, YaalDecision> for YaalVectorBrain {
         }
     }
 }
+struct YaalGenome {
+    brain: YaalVectorBrain,
+    max_speed: f64,
+    field_of_view: i64,
+    max_size: i64,
+}
+
+struct YaalDecision {
+    action: YaalAction,
+    direction: Position<f64>,
+    speed_factor: f64,
+}
 
 struct YaalState {
     health: f64,
     max_health: f64,
-    hunger: f64,
-    max_hunger: f64,
+    size: i64,
+    energy: f64,
+    max_energy: f64,
     age: f64,
 }
 
 pub struct Yaal {
-    internal_states: YaalState,
+    internal_state: YaalState,
     entity: world::Entity,
+    genome: YaalGenome,
+}
+
+impl<T> RandomInit<World<'_>> for T
+where
+    T: EnumFromRepr + strum::EnumCount,
+{
+    fn new_random(world: &mut World) -> Self {
+        let repr = world.random.gen_range(0..T::COUNT);
+        T::from_repr(repr).unwrap()
+    }
+}
+
+impl RandomInit<World<'_>> for DistancePenalty {
+    fn new_random(world: &mut World) -> Self {
+        DistancePenalty {
+            weight: world.random.gen_range(0. ..1.),
+            ptype: PenaltyType::new_random(world),
+        }
+    }
+}
+
+impl RandomInit<World<'_>> for YaalVectorBrain {
+    fn new_random(world: &mut World) -> Self {
+        let device = world.device;
+        let direction_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
+        let speed_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
+        let decision_weights = Tensor::randn(
+            &[world.channels, YaalAction::NB_ACTIONS],
+            (Kind::Float, device),
+        );
+        let decision_sampling = DecisionSampling::new_random(world);
+        let direction_distance_penalty = DistancePenalty::new_random(world);
+        let speed_distance_penalty = DistancePenalty::new_random(world);
+        let decision_distance_penalty = DistancePenalty::new_random(world);
+        let rand_direction_norm = world.random.gen_range(0. ..1.);
+        YaalVectorBrain {
+            device,
+            direction_weights,
+            speed_weights,
+            decision_weights,
+            decision_sampling,
+            direction_distance_penalty,
+            speed_distance_penalty,
+            decision_distance_penalty,
+            rand_direction_norm,
+        }
+    }
+}
+
+impl RandomInit<World<'_>> for YaalGenome {
+    fn new_random(world: &mut World) -> YaalGenome {
+        let max_speed = world.random.gen_range(0. ..1.);
+        let field_of_view = world.random.gen_range(0..=constants::MAX_FOV);
+        let max_size = world.random.gen_range(1..=constants::MAX_SIZE);
+        let brain = YaalVectorBrain::new_random(world);
+        YaalGenome {
+            brain,
+            max_speed,
+            field_of_view,
+            max_size,
+        }
+    }
+}
+
+impl YaalState {
+    /// TODO: Take into account the genome
+    fn new(genome: &YaalGenome) -> YaalState {
+        YaalState {
+            health: 1.,
+            max_health: 1.,
+            energy: 1.,
+            size: 1,
+            max_energy: 1.,
+            age: 0.,
+        }
+    }
+}
+
+impl RandomInit<World<'_>> for Yaal {
+    fn new_random(world: &mut World) -> Yaal {
+        let genome = YaalGenome::new_random(world);
+        let state = YaalState::new(&genome);
+        let square = world::Square::new(state.size, &world);
+        Yaal {
+            internal_state: state,
+            entity: square.entity,
+            genome,
+        }
+    }
 }
 
 impl<'world> WorldObject<World<'world>> for Yaal {
@@ -201,5 +368,15 @@ impl<'world> WorldObject<World<'world>> for Yaal {
 
     fn add_to_map(&self, world: &World) {
         self.entity.add_to_map(world)
+    }
+
+    fn update(&self, world: &mut World) {
+        let output = self.genome.brain.evaluate(
+            world.get_observation(
+                (self.entity.position() + (self.internal_state.size as f64 / 2.)).round(),
+                self.genome.field_of_view + self.internal_state.size,
+            ),
+            &mut world.random,
+        );
     }
 }
