@@ -1,25 +1,15 @@
-use std::os::linux::raw;
-
 use crate::constants;
 use crate::utils;
 use crate::world;
 use rand::rngs::StdRng;
 use rand::Rng;
 use strum_macros::{EnumCount, FromRepr};
-use tch::Device;
 use tch::IndexOp;
-use tch::Shape;
 use tch::{Kind, Tensor};
+use utils::EnumFromRepr;
 use utils::Position;
 use world::World;
 use world::WorldObject;
-
-trait EnumFromRepr
-where
-    Self: Sized,
-{
-    fn from_repr(discriminant: usize) -> Option<Self>;
-}
 
 pub trait RandomInit<W> {
     fn new_random(world: &mut W) -> Self;
@@ -40,6 +30,7 @@ impl EnumFromRepr for PenaltyType {
         PenaltyType::from_repr(discriminant)
     }
 }
+
 #[derive(Debug, Clone, Copy)]
 struct DistancePenalty {
     weight: f64,
@@ -101,9 +92,11 @@ impl DistancePenalty {
         // Compute a_{i,j} = 1/(1 + f dist(i,j))
         let mut mask = self.compute_penalty(&dist);
         // Set mask[side_length/2, side_length/2] to 0
-        mask.i((side_length / 2, side_length / 2)).fill_(0.);
+        let _ = mask.i((side_length / 2, side_length / 2)).fill_(0.);
+        // Set dist[side_length/2, side_length/2] to 1
+        let _ = dist.i((side_length / 2, side_length / 2)).fill_(1.);
         let max = mask.max();
-        mask.divide_(&max);
+        let _ = mask.divide_(&max);
         mask.divide_(&dist)
     }
 }
@@ -132,7 +125,6 @@ impl DecisionSampling {
     /// Sample an index with weighted probabilities
     /// rand must be in range [0,1]
     fn logits_to_index(self, logits: &Tensor) -> i64 {
-        let n = logits.size()[0];
         match self {
             DecisionSampling::Argmax => logits.argmax(0, false).into(),
             DecisionSampling::Softmax => utils::sample_index(&logits.softmax(0, Kind::Float)),
@@ -154,7 +146,7 @@ impl YaalAction {
         }
     }
 }
-
+#[derive(Debug)]
 struct YaalVectorBrain {
     device: tch::Device,
     /// Tensor of shape [world_channels]
@@ -180,7 +172,12 @@ impl YaalVectorBrain {
         let dist_mask = self
             .direction_distance_penalty
             .get_direction_mask(self.device, input_view.size()[1]);
-        let mut eval = input_view.matmul(&self.direction_weights);
+        // View returns a (C, N*M) tensor
+        let mut eval = input_view
+            .reshape(&[input_view.size()[0], -1])
+            .transpose_(0, 1)
+            .matmul(&self.direction_weights)
+            .reshape(&input_view.size()[1..=2]);
         eval *= dist_mask;
         // Compute the average direction vector weighted by eval
         // The origin of the direction vector is the center of the input view
@@ -206,20 +203,32 @@ impl YaalVectorBrain {
     }
 
     fn get_action(&self, input_view: &Tensor) -> YaalAction {
+        // Shape : (N, M) into (N*M,1)
         let mask = self
             .decision_distance_penalty
-            .get_mask(self.device, input_view.size()[1]);
-        let mut eval = input_view.matmul(&self.decision_weights);
+            .get_mask(self.device, input_view.size()[1])
+            .view(-1)
+            .unsqueeze(1);
+        // (N*M, C) * (C, nb_actions) = (N*M, nb_actions)
+        let mut eval = input_view
+            .reshape(&[input_view.size()[0], -1])
+            .transpose_(0, 1)
+            .matmul(&self.decision_weights);
         eval *= mask;
-        let logits = eval.mean_dim(Some([1, 2].as_slice()), false, Kind::Float);
+        let logits = eval.mean_dim(Some([0].as_slice()), false, Kind::Float);
         YaalAction::from_index(self.decision_sampling.logits_to_index(&logits))
     }
 
     fn get_speed_factor(&self, input_view: &Tensor) -> f64 {
         let mask = self
             .speed_distance_penalty
-            .get_mask(self.device, input_view.size()[1]);
-        let mut eval = input_view.matmul(&self.speed_weights);
+            .get_mask(self.device, input_view.size()[1])
+            .view(-1);
+        // (N*M, C) * (C,) = (N*M,)
+        let mut eval = input_view
+            .reshape(&[input_view.size()[0], -1])
+            .transpose_(0, 1)
+            .matmul(&self.speed_weights);
         eval *= mask;
         utils::sigmoid(eval.mean(Kind::Float).into())
     }
@@ -236,6 +245,7 @@ impl Brain<Tensor, YaalDecision> for YaalVectorBrain {
         }
     }
 }
+#[derive(Debug)]
 struct YaalGenome {
     brain: YaalVectorBrain,
     max_speed: f64,
@@ -243,12 +253,14 @@ struct YaalGenome {
     max_size: i64,
 }
 
+#[derive(Debug)]
 struct YaalDecision {
     action: YaalAction,
     direction: Position<f64>,
     speed_factor: f64,
 }
 
+#[derive(Debug)]
 struct YaalState {
     health: f64,
     max_health: f64,
@@ -258,6 +270,7 @@ struct YaalState {
     age: f64,
 }
 
+#[derive(Debug)]
 pub struct Yaal {
     internal_state: YaalState,
     entity: world::Entity,
@@ -344,6 +357,7 @@ impl RandomInit<World<'_>> for Yaal {
     fn new_random(world: &mut World) -> Yaal {
         let genome = YaalGenome::new_random(world);
         let state = YaalState::new(&genome);
+        // Todo proper body init
         let square = world::Square::new(state.size, &world);
         Yaal {
             internal_state: state,
@@ -371,12 +385,18 @@ impl<'world> WorldObject<World<'world>> for Yaal {
     }
 
     fn update(&self, world: &mut World) {
-        let output = self.genome.brain.evaluate(
-            world.get_observation(
-                (self.entity.position() + (self.internal_state.size as f64 / 2.)).round(),
-                self.genome.field_of_view + self.internal_state.size,
-            ),
-            &mut world.random,
+        let sensory_input = world.get_observation(
+            (self.entity.position() + (self.internal_state.size as f64 / 2.)).round(),
+            self.genome.field_of_view,
+            self.internal_state.size,
         );
+        println!(
+            "Yaal input: {:#?}\nshape: {:#?}",
+            sensory_input,
+            sensory_input.size()
+        );
+        let output = self.genome.brain.evaluate(sensory_input, &mut world.random);
+        // TODO use output to update the Yaal
+        println!("Yaal action: {:#?}", output);
     }
 }
