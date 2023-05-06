@@ -58,14 +58,13 @@ pub(crate) struct Square {
 impl Square {
     pub fn new(side_length: i64, world: &World) -> Self {
         Square {
-            entity: Entity {
+            entity: Entity::new(
                 side_length,
-                position: Position::new(0., 0.),
-                body: Tensor::ones(
+                Tensor::ones(
                     &[world.channels, side_length, side_length],
                     (world.val_type, world.device),
                 ),
-            },
+            ),
         }
     }
 }
@@ -120,7 +119,6 @@ impl<'world> World<'world> {
     pub fn add_entity(&mut self, object: &'world dyn WorldObject<World<'world>>) {
         self.objects.push(object);
     }
-
     pub fn new(
         width: i64,
         height: i64,
@@ -169,6 +167,7 @@ impl<'world> World<'world> {
 
     /// Given a map with a certain field of view, get_view returns a tensor
     /// that represents the view of the map from the given position.
+    /// The position is the center of the view.
     ///
     /// The tensor has dimensions (channels, 2 * field_of_view + 1, 2 * field_of_view + 1)
     /// and contains the values of the map in the corresponding positions.
@@ -190,17 +189,22 @@ impl<'world> World<'world> {
     /// 2 1 0
     ///
     /// which corresponds to the view of the map from the position P with a field of view of 1.
-    pub fn get_observation(&self, position: Position<i64>, field_of_view: i64) -> Tensor {
+    pub fn get_observation(
+        &self,
+        position: Position<i64>,
+        field_of_view: i64,
+        size: i64,
+    ) -> Tensor {
         self.map
             .narrow(
                 1,
                 position.y + self.max_field_of_view - field_of_view,
-                2 * field_of_view + 1,
+                2 * field_of_view + size,
             )
             .narrow(
                 2,
                 position.x + self.max_field_of_view - field_of_view,
-                2 * field_of_view + 1,
+                2 * field_of_view + size,
             )
     }
     /// Returns a submap of which top left point is in position
