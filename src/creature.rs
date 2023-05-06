@@ -11,20 +11,24 @@ use utils::Position;
 use world::World;
 use world::WorldObject;
 
+/// Trait that allows to create a new object with random values
 pub trait RandomInit<W> {
     fn new_random(world: &mut W) -> Self;
 }
 
+/// Trait for a creature's brain
 trait Brain<Input, Output> {
     fn evaluate(&self, input: Input, random: &mut StdRng) -> Output;
 }
 
 #[derive(FromRepr, EnumCount, Debug, Clone, Copy)]
+/// The type of penalty function used to compute the distance penalty
 enum PenaltyType {
     Linear,
     Quadratic,
     Exponential,
 }
+// Useful for RandomInit
 impl EnumFromRepr for PenaltyType {
     fn from_repr(discriminant: usize) -> Option<Self> {
         PenaltyType::from_repr(discriminant)
@@ -32,12 +36,14 @@ impl EnumFromRepr for PenaltyType {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Weighted distance penalty
 struct DistancePenalty {
     weight: f64,
     ptype: PenaltyType,
 }
 
 impl DistancePenalty {
+    /// Computes the distance penalty function for a given distance
     fn compute_penalty(self, dist: &Tensor) -> Tensor {
         match self.ptype {
             PenaltyType::Linear => 1. / (1. + self.weight.max(0.) * dist),
@@ -102,6 +108,7 @@ impl DistancePenalty {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// The actions that a Yaal can execute
 enum YaalAction {
     Attack,
     Reproduce,
@@ -109,12 +116,13 @@ enum YaalAction {
 }
 
 #[derive(FromRepr, EnumCount, Debug, Clone, Copy)]
+/// The type of decision sampling used to choose an action
 enum DecisionSampling {
     Softmax,
     Argmax,
     Sample,
 }
-
+// Useful for RandomInit
 impl EnumFromRepr for DecisionSampling {
     fn from_repr(discriminant: usize) -> Option<Self> {
         DecisionSampling::from_repr(discriminant)
@@ -122,8 +130,7 @@ impl EnumFromRepr for DecisionSampling {
 }
 
 impl DecisionSampling {
-    /// Sample an index with weighted probabilities
-    /// rand must be in range [0,1]
+    /// Sample an index with weighted probabilities from logits
     fn logits_to_index(self, logits: &Tensor) -> i64 {
         match self {
             DecisionSampling::Argmax => logits.argmax(0, false).into(),
@@ -147,6 +154,7 @@ impl YaalAction {
     }
 }
 #[derive(Debug)]
+/// A brain which decision are mostly based on scalar products
 struct YaalVectorBrain {
     device: tch::Device,
     /// Tensor of shape [world_channels]
@@ -162,7 +170,16 @@ struct YaalVectorBrain {
     rand_direction_norm: f64,
 }
 
+#[derive(Debug)]
+/// A decision made by a Yaal
+struct YaalDecision {
+    action: YaalAction,
+    direction: Position<f64>,
+    speed_factor: f64,
+}
+
 impl YaalVectorBrain {
+    /// Get the preferred direction of the Yaal
     fn get_direction(
         &self,
         input_view: &Tensor,
@@ -202,6 +219,7 @@ impl YaalVectorBrain {
         raw_dir.normalize()
     }
 
+    /// Get the preferred speed of the Yaal
     fn get_action(&self, input_view: &Tensor) -> YaalAction {
         // Shape : (N, M) into (N*M,1)
         let mask = self
@@ -219,6 +237,7 @@ impl YaalVectorBrain {
         YaalAction::from_index(self.decision_sampling.logits_to_index(&logits))
     }
 
+    /// Get the preferred speed factor of the Yaal
     fn get_speed_factor(&self, input_view: &Tensor) -> f64 {
         let mask = self
             .speed_distance_penalty
@@ -246,6 +265,7 @@ impl Brain<Tensor, YaalDecision> for YaalVectorBrain {
     }
 }
 #[derive(Debug)]
+/// Contains all the genetic information of a Yaal
 struct YaalGenome {
     brain: YaalVectorBrain,
     max_speed: f64,
@@ -254,13 +274,7 @@ struct YaalGenome {
 }
 
 #[derive(Debug)]
-struct YaalDecision {
-    action: YaalAction,
-    direction: Position<f64>,
-    speed_factor: f64,
-}
-
-#[derive(Debug)]
+/// The state of a Yaal, can be used as input
 struct YaalState {
     health: f64,
     max_health: f64,
@@ -271,11 +285,14 @@ struct YaalState {
 }
 
 #[derive(Debug)]
+/// A little creature
 pub struct Yaal {
     internal_state: YaalState,
     entity: world::Entity,
     genome: YaalGenome,
 }
+
+// #### Random init ####
 
 impl<T> RandomInit<World<'_>> for T
 where
@@ -367,6 +384,7 @@ impl RandomInit<World<'_>> for Yaal {
     }
 }
 
+// Allows Yaal to be used as a WorldObject (therefore to be added and interact with the world)
 impl<'world> WorldObject<World<'world>> for Yaal {
     fn position(&self) -> Position<f64> {
         self.entity.position()
