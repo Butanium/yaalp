@@ -1,0 +1,16 @@
+on: push
+
+name: Rustfmt
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      # You may pin to the exact commit or the version.
+      # uses: mbrobbel/rustfmt-check@5bff2c089f8c32070f1ec03b23fcc51f7604e0ff
+      - uses: mbrobbel/rustfmt-check@0.5.0
+        with:
+          # GitHub token
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Arguments for cargo. Not for rustfmt options.
+#           args: # optional
