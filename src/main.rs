@@ -1,51 +1,36 @@
+use graphics::Drawable;
 use notan::draw::*;
 use notan::prelude::*;
+use world::WorldObject;
 mod constants;
 mod creature;
+mod graphics;
 mod utils;
 mod world;
 use crate::creature::RandomInit;
 use crate::world::World;
 use tch::IndexOp;
 
-// #[notan_main] // uncomment to test notan window
+const WIDTH: i32 = 500;
+const HEIGHT: i32 = 500;
+
+#[derive(AppState)]
+struct State<'world> {
+    world: World<'world>,
+    frame: usize,
+}
+
+#[notan_main]
 fn main() -> Result<(), String> {
-    let device = if tch::Cuda::is_available() {
-        tch::Device::Cuda(0)
-    } else {
-        tch::Device::Cpu
-    };
-    let _guard = tch::no_grad_guard(); // disable gradient calculation
-    println!("Device used: {:?}", device);
-    let seed = rand::random();
-    println!("Seed used: {:?}", seed);
-    // Create a dummy world
-    let mut world = World::new(
-        3,
-        3,
-        2,
-        2,
-        &[0.5, 0.9],
-        &[10., 10.],
-        device,
-        tch::Kind::Float,
-        seed,
-    );
-    // Create some dummy creatures
-    let square = world::Square::new(2, &world);
-    let yaal = creature::Yaal::new_random(&mut world);
-    world.add_entity(&yaal);
-    println!("Our Yaal: {:#?}", yaal);
-    world.add_entity(&square);
-    world.print();
-    for i in 0..3 {
-        world.update();
-        println!("\nAfter update{:?}:", i);
-        world.print();
-    }
-    // dummy return value
-    Ok(())
-    // notan::init().draw(draw).add_config(DrawConfig).build()
+    // let win_config = WindowConfig::new().size(WIDTH, HEIGHT).vsync(true);
+    let win_config = WindowConfig::new().set_vsync(true);
+
+    notan::init_with(init)
+        .add_config(win_config)
+        .add_config(DrawConfig)
+        .update(update)
+        .draw(draw)
+        .build()
 }
 #[test]
 fn smoke_test() {
@@ -53,10 +38,57 @@ fn smoke_test() {
         main().unwrap();
     }
 }
-// notan example
-// fn draw(gfx: &mut Graphics) {
-//     let mut draw = gfx.create_draw();
-//     draw.clear(Color::BLACK);
-//     draw.triangle((400.0, 100.0), (100.0, 500.0), (700.0, 500.0));
-//     gfx.render(&draw);
-// }
+const DELTA_TIME: f32 = 1. / 60.;
+fn create_world(gfx: &mut Graphics) -> World {
+    let _guard = tch::no_grad_guard(); // disable gradient calculation
+
+    let device = if tch::Cuda::is_available() {
+        tch::Device::Cuda(0)
+    } else {
+        tch::Device::Cpu
+    };
+    println!("Device used: {:?}", device);
+    let seed = rand::random();
+    // RGB World
+    World::new(
+        WIDTH as i64,
+        HEIGHT as i64,
+        3,
+        10,
+        &[0., 0., 0.],
+        &[255., 255., 255.],
+        device,
+        tch::Kind::Float,
+        seed,
+        gfx,
+        DELTA_TIME,
+    )
+}
+
+fn init<'world>(gfx: &mut Graphics) -> State<'world> {
+    State {
+        world: create_world(gfx),
+        frame: 0,
+    }
+}
+
+fn update<'world>(app: &mut App, state: &mut State<'world>) {
+    let _guard = tch::no_grad_guard(); // disable gradient calculation
+    state.world.update();
+    state.frame += 1;
+    if state.frame % 120 == 0 {
+        let mut yaal = creature::Yaal::new_random(&mut state.world);
+        yaal.set_position(
+            state.world.random.gen_range(50. ..250.),
+            state.world.random.gen_range(50. ..250.),
+        );
+        state.world.add_entity(&mut yaal);
+    }
+}
+
+fn draw<'world>(gfx: &mut Graphics, state: &mut State<'world>) {
+    let mut draw = gfx.create_draw();
+    draw.clear(Color::BLACK);
+    state.world.draw(&mut draw);
+}
+ 

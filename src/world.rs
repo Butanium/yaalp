@@ -1,56 +1,109 @@
-use crate::utils::Position;
+use std::sync::Mutex;
+
+use crate::Graphics;
+use crate::{graphics::Drawable, utils::Position};
+// use auto_delegate::delegate; todo use later for world: https://github.com/elm-register/auto-delegate/issues/2
+use notan::draw::{CreateDraw, Draw, DrawImages, DrawTransform};
+use notan::math::{Affine2, Affine3A, Mat3, Mat3A, Vec2, Vec3};
+use notan::prelude::Texture;
 use tch::Tensor;
+
+#[derive(Debug)]
+struct GameTransform(Option<Mat3>);
+impl DrawTransform for GameTransform {
+    fn matrix(&mut self) -> &mut Option<notan::math::Mat3> {
+        &mut self.0
+    }
+}
 
 #[derive(Debug)]
 /// Represents an entity in the world.
 ///
 /// An entity has a position (x, y) and a body, which is a tensor representing its shape.
 pub(crate) struct Entity {
-    side_length: i64,
-    position: Position<f64>,
+    transform: GameTransform,
     body: Tensor,
+    scaled_body: Tensor,
+    direction: Vec2,
+    pub speed: f32,
 }
 
 impl Entity {
-    pub fn new(side_length: i64, body: Tensor) -> Self {
+    /// Create a new entity with `base_body`
+    pub fn new(body: Tensor) -> Self {
         Entity {
-            side_length,
-            position: Position::new(0., 0.),
-            body,
+            transform: GameTransform(Some(
+                Affine3A::from_scale(Vec3::new(body.size()[1] as f32, body.size()[2] as f32, 1.))
+                    .matrix3
+                    .into(),
+            )),
+            body: body,
+            scaled_body: body,
+            direction: Vec2::new(1., 0.),
+            speed: 0.,
         }
     }
+
+    pub fn scale(&mut self, width: f32, height: f32) {
+        self.transform.scale(width, height);
+        self.scaled_body =
+            tch::vision::image::resize(&self.body, width.ceil() as i64, height.ceil() as i64)
+                .unwrap();
+    }
+
+    pub fn set_direction(&mut self, direction: Vec2) {
+        self.direction = direction.normalize_or_zero();
+    }
+
+    pub fn direction(&self) -> Vec2 {
+        self.direction
+    }
+}
+
+impl Drawable for Entity {
+    fn draw(&self, draw: &mut Draw) {}
+}
+
+struct SpriteEntity {
+    entity: Entity,
+    sprite: Texture,
 }
 
 /// The WorldObject trait is implemented for entities that can be added to the world.
-pub trait WorldObject<W> {
-    fn position(&self) -> Position<f64>;
-    fn set_position(&mut self, x: f64, y: f64);
-    fn world_pos(&self) -> Position<i64>;
+pub trait WorldObject<W>: Drawable {
+    fn position(&self) -> Vec2;
+    fn set_position(&mut self, x: f32, y: f32);
     fn add_to_map(&self, world: &W);
-    fn update(&self, world: &mut W) {}
+    fn update(&mut self, world: &mut W) {}
+    fn size(&self) -> Vec2;
 }
 
 impl<'world> WorldObject<World<'world>> for Entity {
-    fn position(&self) -> Position<f64> {
-        self.position
+    fn position(&self) -> Vec2 {
+        self.transform.0.unwrap().translation.truncate()
     }
 
-    fn set_position(&mut self, x: f64, y: f64) {
-        self.position.x = x;
-        self.position.y = y;
-    }
-
-    fn world_pos(&self) -> Position<i64> {
-        self.position.round()
+    fn set_position(&mut self, x: f32, y: f32) {
+        self.transform.0.translation.x = x;
+        self.transform.0.translation.y = y;
     }
 
     fn add_to_map(&self, world: &World<'world>) {
-        let mut view = world.get_submap(self.world_pos(), self.side_length);
+        let mut view =
+            world.get_submap(self.position(), self.size().x as i64, self.size().y as i64);
         view += &self.body;
+    }
+
+    fn size(&self) -> Vec2 {
+        self.transform
+            .0
+            .to_scale_rotation_translation()
+            .0
+            .truncate()
     }
 }
 
-/// WorldObject example
+/// A WorldObject that is just a square.
 pub(crate) struct Square {
     pub entity: Entity,
 }
@@ -58,33 +111,31 @@ pub(crate) struct Square {
 impl Square {
     pub fn new(side_length: i64, world: &World) -> Self {
         Square {
-            entity: Entity::new(
-                side_length,
-                Tensor::ones(
-                    &[world.channels, side_length, side_length],
-                    (world.val_type, world.device),
-                ),
-            ),
+            entity: Entity::new(Tensor::ones(
+                &[world.channels, side_length, side_length],
+                (world.val_type, world.device),
+            )),
         }
     }
 }
 
 impl<'world> WorldObject<World<'world>> for Square {
-    fn position(&self) -> Position<f64> {
+    fn position(&self) -> Vec2 {
         self.entity.position()
     }
-
-    fn set_position(&mut self, x: f64, y: f64) {
+    fn set_position(&mut self, x: f32, y: f32) {
         self.entity.set_position(x, y);
     }
-
-    fn world_pos(&self) -> Position<i64> {
-        self.entity.world_pos()
-    }
-
     fn add_to_map(&self, world: &World) {
         self.entity.add_to_map(world)
     }
+    fn size(&self) -> Vec2 {
+        self.entity.size()
+    }
+}
+
+impl Drawable for Square {
+    fn draw(&self, draw: &mut Draw) {}
 }
 
 pub(crate) struct World<'world> {
@@ -97,8 +148,10 @@ pub(crate) struct World<'world> {
     pub device: tch::Device,
     val_type: tch::Kind,
     max_field_of_view: i64,
-    objects: Vec<&'world dyn WorldObject<World<'world>>>,
+    objects: Vec<Mutex<&'world dyn WorldObject<World<'world>>>>,
     pub random: rand::rngs::StdRng,
+    pub gfx: &'world mut Graphics,
+    pub delta_time: f32,
 }
 
 /// Represents the game world.
@@ -129,6 +182,8 @@ impl<'world> World<'world> {
         device: tch::Device,
         val_type: tch::Kind,
         seed: u64,
+        gfx: &'world mut Graphics,
+        delta_time: f32,
     ) -> Self {
         let map = Tensor::zeros(
             &[
@@ -162,6 +217,8 @@ impl<'world> World<'world> {
             max_field_of_view,
             objects: vec![],
             random: rand::SeedableRng::seed_from_u64(seed),
+            gfx,
+            delta_time,
         }
     }
 
@@ -189,36 +246,49 @@ impl<'world> World<'world> {
     /// 2 1 0
     ///
     /// which corresponds to the view of the map from the position P with a field of view of 1.
-    pub fn get_observation(
-        &self,
-        position: Position<i64>,
-        field_of_view: i64,
-        size: i64,
-    ) -> Tensor {
+    pub fn get_observation(&self, position: Vec2, field_of_view: i64, size: Vec2) -> Tensor {
         self.map
             .narrow(
                 1,
-                position.y + self.max_field_of_view - field_of_view,
-                2 * field_of_view + size,
+                position.y.round() as i64 + self.max_field_of_view - field_of_view,
+                2 * field_of_view + size.x.ceil() as i64,
             )
             .narrow(
                 2,
-                position.x + self.max_field_of_view - field_of_view,
-                2 * field_of_view + size,
+                position.x.round() as i64 + self.max_field_of_view - field_of_view,
+                2 * field_of_view + size.y.ceil() as i64,
             )
     }
     /// Returns a submap of which top left point is in position
     /// The returned tensor has dimensions (channels, side_length, side_length).
-    pub fn get_submap(&self, position: Position<i64>, side_lenght: i64) -> Tensor {
+    pub fn get_submap(&self, position: Vec2, width: i64, height: i64) -> Tensor {
         self.map
-            .narrow(1, position.y + self.max_field_of_view, side_lenght)
-            .narrow(2, position.x + self.max_field_of_view, side_lenght)
+            .narrow(
+                1,
+                position.y.round() as i64 + self.max_field_of_view,
+                height,
+            )
+            .narrow(2, position.x.round() as i64 + self.max_field_of_view, width)
+    }
+
+    pub fn bound_position(&self, entity: &Entity) {
+        if entity.position().x - entity.size().x / 2.0 < 0.0 {
+            entity.position().x = entity.size().x / 2.0;
+        }
+        if entity.position().x + entity.size().x / 2.0 > self.width as f32 {
+            entity.position().x = self.width as f32 - entity.size().x / 2.0;
+        }
+        if entity.position().y - entity.size().y / 2.0 < 0.0 {
+            entity.position().y = entity.size().y / 2.0;
+        }
+        if entity.position().y + entity.size().y / 2.0 > self.height as f32 {
+            entity.position().y = self.height as f32 - entity.size().y / 2.0;
+        }
     }
 
     pub fn print(&self) {
         self.map.print()
     }
-
     /// Update the world
     pub fn update(&mut self) {
         let objects = self.objects.clone(); // To allow to pass a mutable ref of world in objects update
@@ -233,6 +303,12 @@ impl<'world> World<'world> {
             object.add_to_map(self)
         }
         // Clamp max values
-        self.map.clamp_max_tensor_(&self.max_values); // in place operation, result can safely be ignored
+        let _ = self.map.clamp_max_tensor_(&self.max_values); // in place operation, result can safely be ignored
+    }
+}
+
+impl<'world> Drawable for World<'world> {
+    fn draw(&self, draw: &mut Draw) {
+        self.objects.iter().for_each(|object| object.draw(draw));
     }
 }

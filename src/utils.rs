@@ -74,8 +74,8 @@ impl<I: Copy> Position<I> {
     }
 }
 
-impl Position<f64> {
-    pub fn normalize(&self) -> Position<f64> {
+impl Position<f32> {
+    pub fn normalize(&self) -> Position<f32> {
         let norm = (self.x.powi(2) + self.y.powi(2)).sqrt();
         Position {
             x: self.x,
@@ -91,7 +91,7 @@ impl Position<f64> {
     }
 }
 
-pub fn sigmoid(x: f64) -> f64 {
+pub fn sigmoid(x: f32) -> f32 {
     1. / (1. + (-x).exp())
 }
 

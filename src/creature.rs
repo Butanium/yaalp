@@ -1,19 +1,43 @@
+use std::path;
+
 use crate::constants;
+use crate::graphics::image_texture;
+use crate::graphics::Drawable;
 use crate::utils;
 use crate::world;
+use crate::world::Entity;
+use delegate::delegate;
+use notan::draw::CreateDraw;
+use notan::draw::Draw;
+use notan::draw::DrawImages;
+use notan::math::Vec2;
+use notan::prelude::Graphics;
+use notan::prelude::Texture;
 use rand::rngs::StdRng;
 use rand::Rng;
 use strum_macros::{EnumCount, FromRepr};
 use tch::IndexOp;
 use tch::{Kind, Tensor};
 use utils::EnumFromRepr;
-use utils::Position;
 use world::World;
 use world::WorldObject;
+
+const YAAL_SPRITE: &str = "hex.png";
 
 /// Trait that allows to create a new object with random values
 pub trait RandomInit<W> {
     fn new_random(world: &mut W) -> Self;
+}
+
+trait MovingObject {
+    fn position(&self) -> Vec2;
+    fn set_position(&mut self, x: f32, y: f32);
+    fn direction(&self) -> Vec2;
+    fn speed(&self) -> f32;
+    fn updatePos(&mut self, delta: f32) {
+        let new_pos = self.position() + self.direction() * self.speed() * delta;
+        self.set_position(new_pos.x, new_pos.y);
+    }
 }
 
 /// Trait for a creature's brain
@@ -167,25 +191,33 @@ struct YaalVectorBrain {
     direction_distance_penalty: DistancePenalty,
     speed_distance_penalty: DistancePenalty,
     decision_distance_penalty: DistancePenalty,
-    rand_direction_norm: f64,
+    rand_direction_norm: f32,
 }
 
 #[derive(Debug)]
 /// A decision made by a Yaal
 struct YaalDecision {
     action: YaalAction,
-    direction: Position<f64>,
-    speed_factor: f64,
+    direction: Vec2,
+    speed_factor: f32,
+}
+impl YaalDecision {
+    /// Apply the decision to the Yaal
+    fn apply(&self, yaal: &mut Yaal) {
+        // TODO: Implement actions
+        match self.action {
+            YaalAction::Attack => (),
+            YaalAction::Reproduce => (),
+            YaalAction::Nop => (),
+        }
+        yaal.entity.set_direction(self.direction);
+        yaal.entity.speed = yaal.genome.max_speed * self.speed_factor;
+    }
 }
 
 impl YaalVectorBrain {
     /// Get the preferred direction of the Yaal
-    fn get_direction(
-        &self,
-        input_view: &Tensor,
-        rand_norm: f64,
-        random: &mut StdRng,
-    ) -> Position<f64> {
+    fn get_direction(&self, input_view: &Tensor, rand_norm: f32, random: &mut StdRng) -> Vec2 {
         let dist_mask = self
             .direction_distance_penalty
             .get_direction_mask(self.device, input_view.size()[1]);
@@ -212,10 +244,9 @@ impl YaalVectorBrain {
         let y = &xy[1];
         let dir_x = ((x * &eval) - center).mean(Kind::Float);
         let dir_y = ((y * &eval) - center).mean(Kind::Float);
-        let rand_dir = Position::<f64>::new(random.gen_range(0. ..1.), random.gen_range(0. ..1.))
-            .normalize()
-            * rand_norm;
-        let raw_dir: Position<f64> = Position::<f64>::new(dir_x.into(), dir_y.into()) + rand_dir;
+        let rand_dir =
+            Vec2::new(random.gen_range(0. ..1.), random.gen_range(0. ..1.)).normalize() * rand_norm;
+        let raw_dir = Vec2::new(dir_x.into(), dir_y.into()) + rand_dir;
         raw_dir.normalize()
     }
 
@@ -238,7 +269,7 @@ impl YaalVectorBrain {
     }
 
     /// Get the preferred speed factor of the Yaal
-    fn get_speed_factor(&self, input_view: &Tensor) -> f64 {
+    fn get_speed_factor(&self, input_view: &Tensor) -> f32 {
         let mask = self
             .speed_distance_penalty
             .get_mask(self.device, input_view.size()[1])
@@ -268,7 +299,7 @@ impl Brain<Tensor, YaalDecision> for YaalVectorBrain {
 /// Contains all the genetic information of a Yaal
 struct YaalGenome {
     brain: YaalVectorBrain,
-    max_speed: f64,
+    max_speed: f32,
     field_of_view: i64,
     max_size: i64,
 }
@@ -278,7 +309,6 @@ struct YaalGenome {
 struct YaalState {
     health: f64,
     max_health: f64,
-    size: i64,
     energy: f64,
     max_energy: f64,
     age: f64,
@@ -290,10 +320,10 @@ pub struct Yaal {
     internal_state: YaalState,
     entity: world::Entity,
     genome: YaalGenome,
+    sprite: Texture,
 }
 
 // #### Random init ####
-
 impl<T> RandomInit<World<'_>> for T
 where
     T: EnumFromRepr + strum::EnumCount,
@@ -363,7 +393,6 @@ impl YaalState {
             health: 1.,
             max_health: 1.,
             energy: 1.,
-            size: 1,
             max_energy: 1.,
             age: 0.,
         }
@@ -374,39 +403,46 @@ impl RandomInit<World<'_>> for Yaal {
     fn new_random(world: &mut World) -> Yaal {
         let genome = YaalGenome::new_random(world);
         let state = YaalState::new(&genome);
-        // Todo proper body init
-        let square = world::Square::new(state.size, &world);
+        let body =
+            tch::vision::image::load(path::Path::new("assets").join("sprites").join(YAAL_SPRITE))
+                .unwrap();
         Yaal {
             internal_state: state,
-            entity: square.entity,
+            entity: Entity::new(body),
             genome,
+            sprite: image_texture(YAAL_SPRITE, world.gfx),
         }
+    }
+}
+
+impl MovingObject for Yaal {
+    delegate! {
+        to self.entity {
+            fn position(&self) -> Vec2;
+            fn set_position(&mut self, x: f32, y: f32);
+            fn direction(&self) -> Vec2;
+        }
+    }
+    fn speed(&self) -> f32 {
+        self.entity.speed
     }
 }
 
 // Allows Yaal to be used as a WorldObject (therefore to be added and interact with the world)
 impl<'world> WorldObject<World<'world>> for Yaal {
-    fn position(&self) -> Position<f64> {
-        self.entity.position()
+    delegate! {
+        to self.entity {
+            fn position(&self) -> Vec2;
+            fn set_position(&mut self, x: f32, y: f32);
+            fn add_to_map(&self, world: &World);
+            fn size(&self) -> Vec2;
+        }
     }
-
-    fn set_position(&mut self, x: f64, y: f64) {
-        self.entity.set_position(x, y);
-    }
-
-    fn world_pos(&self) -> Position<i64> {
-        self.entity.world_pos()
-    }
-
-    fn add_to_map(&self, world: &World) {
-        self.entity.add_to_map(world)
-    }
-
-    fn update(&self, world: &mut World) {
+    fn update(&mut self, world: &mut World) {
         let sensory_input = world.get_observation(
-            (self.entity.position() + (self.internal_state.size as f64 / 2.)).round(),
+            (self.entity.position() + (self.entity.size() / 2.)).round(),
             self.genome.field_of_view,
-            self.internal_state.size,
+            self.entity.size(),
         );
         println!(
             "Yaal input: {:#?}\nshape: {:#?}",
@@ -414,7 +450,19 @@ impl<'world> WorldObject<World<'world>> for Yaal {
             sensory_input.size()
         );
         let output = self.genome.brain.evaluate(sensory_input, &mut world.random);
+        output.apply(self);
+        self.updatePos(world.delta_time);
+        world.bound_position(&self.entity);
         // TODO use output to update the Yaal
         println!("Yaal action: {:#?}", output);
+    }
+}
+
+impl Drawable for Yaal {
+    fn draw(&self, draw: &mut Draw) {
+        let size = self.size();
+        draw.image(&self.sprite)
+            .position(self.entity.position().x, self.entity.position().y)
+            .size(size.x, size.y);
     }
 }
