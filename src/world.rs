@@ -1,6 +1,7 @@
+use std::cell::RefCell;
 use std::sync::Mutex;
 
-use crate::Graphics;
+use crate::{graphics, Graphics};
 use crate::{graphics::Drawable, utils::Position};
 // use auto_delegate::delegate; todo use later for world: https://github.com/elm-register/auto-delegate/issues/2
 use notan::draw::{CreateDraw, Draw, DrawImages, DrawTransform};
@@ -9,19 +10,12 @@ use notan::prelude::Texture;
 use tch::Tensor;
 
 #[derive(Debug)]
-struct GameTransform(Option<Mat3>);
-impl DrawTransform for GameTransform {
-    fn matrix(&mut self) -> &mut Option<notan::math::Mat3> {
-        &mut self.0
-    }
-}
-
-#[derive(Debug)]
 /// Represents an entity in the world.
 ///
 /// An entity has a position (x, y) and a body, which is a tensor representing its shape.
 pub(crate) struct Entity {
-    transform: GameTransform,
+    position: Vec2,
+    size: Vec2,
     body: Tensor,
     scaled_body: Tensor,
     direction: Vec2,
@@ -32,20 +26,17 @@ impl Entity {
     /// Create a new entity with `base_body`
     pub fn new(body: Tensor) -> Self {
         Entity {
-            transform: GameTransform(Some(
-                Affine3A::from_scale(Vec3::new(body.size()[1] as f32, body.size()[2] as f32, 1.))
-                    .matrix3
-                    .into(),
-            )),
+            position: Vec2::new(0., 0.),
+            size: Vec2::new(1., 1.),
+            scaled_body: body.copy(),
             body: body,
-            scaled_body: body,
             direction: Vec2::new(1., 0.),
             speed: 0.,
         }
     }
 
-    pub fn scale(&mut self, width: f32, height: f32) {
-        self.transform.scale(width, height);
+    pub fn rescale(&mut self, width: f32, height: f32) {
+        self.size = Vec2::new(width, height);
         self.scaled_body =
             tch::vision::image::resize(&self.body, width.ceil() as i64, height.ceil() as i64)
                 .unwrap();
@@ -78,28 +69,24 @@ pub trait WorldObject<W>: Drawable {
     fn size(&self) -> Vec2;
 }
 
-impl<'world> WorldObject<World<'world>> for Entity {
+impl WorldObject<World> for Entity {
     fn position(&self) -> Vec2 {
-        self.transform.0.unwrap().translation.truncate()
+        self.position
     }
 
     fn set_position(&mut self, x: f32, y: f32) {
-        self.transform.0.translation.x = x;
-        self.transform.0.translation.y = y;
+        self.position = Vec2::new(x, y);
     }
 
-    fn add_to_map(&self, world: &World<'world>) {
+    /// Add the entity to the world map.
+    fn add_to_map(&self, world: &World) {
         let mut view =
             world.get_submap(self.position(), self.size().x as i64, self.size().y as i64);
         view += &self.body;
     }
 
     fn size(&self) -> Vec2 {
-        self.transform
-            .0
-            .to_scale_rotation_translation()
-            .0
-            .truncate()
+        self.size
     }
 }
 
@@ -119,7 +106,7 @@ impl Square {
     }
 }
 
-impl<'world> WorldObject<World<'world>> for Square {
+impl WorldObject<World> for Square {
     fn position(&self) -> Vec2 {
         self.entity.position()
     }
@@ -138,7 +125,7 @@ impl Drawable for Square {
     fn draw(&self, draw: &mut Draw) {}
 }
 
-pub(crate) struct World<'world> {
+pub(crate) struct World {
     map: Tensor,
     height: i64,
     width: i64,
@@ -148,9 +135,8 @@ pub(crate) struct World<'world> {
     pub device: tch::Device,
     val_type: tch::Kind,
     max_field_of_view: i64,
-    objects: Vec<Mutex<&'world dyn WorldObject<World<'world>>>>,
+    objects: Vec<Box<dyn WorldObject<World>>>,
     pub random: rand::rngs::StdRng,
-    pub gfx: &'world mut Graphics,
     pub delta_time: f32,
 }
 
@@ -168,8 +154,8 @@ pub(crate) struct World<'world> {
 ///
 /// The World struct provides methods for adding entities to the world, getting views of the world from a certain position,
 /// and updating the values in the world based on the decay and max value tensors.
-impl<'world> World<'world> {
-    pub fn add_entity(&mut self, object: &'world dyn WorldObject<World<'world>>) {
+impl World {
+    pub fn add_entity(&mut self, object: Box<dyn WorldObject<World>>) {
         self.objects.push(object);
     }
     pub fn new(
@@ -182,7 +168,6 @@ impl<'world> World<'world> {
         device: tch::Device,
         val_type: tch::Kind,
         seed: u64,
-        gfx: &'world mut Graphics,
         delta_time: f32,
     ) -> Self {
         let map = Tensor::zeros(
@@ -217,7 +202,6 @@ impl<'world> World<'world> {
             max_field_of_view,
             objects: vec![],
             random: rand::SeedableRng::seed_from_u64(seed),
-            gfx,
             delta_time,
         }
     }
@@ -291,10 +275,10 @@ impl<'world> World<'world> {
     }
     /// Update the world
     pub fn update(&mut self) {
-        let objects = self.objects.clone(); // To allow to pass a mutable ref of world in objects update
-                                            // Update worldObjects
-        for object in objects {
-            object.update(self)
+        // let objects = self.objects.clone(); // To allow to pass a mutable ref of world in objects update
+        // Update worldObjects
+        for object in self.objects.iter() {
+            object.as_mut().update(self);
         }
         // Decay
         self.map *= &self.decays;
@@ -307,7 +291,7 @@ impl<'world> World<'world> {
     }
 }
 
-impl<'world> Drawable for World<'world> {
+impl Drawable for World {
     fn draw(&self, draw: &mut Draw) {
         self.objects.iter().for_each(|object| object.draw(draw));
     }

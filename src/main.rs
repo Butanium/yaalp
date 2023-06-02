@@ -15,9 +15,10 @@ const WIDTH: i32 = 500;
 const HEIGHT: i32 = 500;
 
 #[derive(AppState)]
-struct State<'world> {
-    world: World<'world>,
+struct State<'a> {
+    world: World,
     frame: usize,
+    texture_manager: graphics::TextureManager<'a>,
 }
 
 #[notan_main]
@@ -39,7 +40,7 @@ fn smoke_test() {
     }
 }
 const DELTA_TIME: f32 = 1. / 60.;
-fn create_world(gfx: &mut Graphics) -> World {
+fn create_world() -> World {
     let _guard = tch::no_grad_guard(); // disable gradient calculation
 
     let device = if tch::Cuda::is_available() {
@@ -60,35 +61,34 @@ fn create_world(gfx: &mut Graphics) -> World {
         device,
         tch::Kind::Float,
         seed,
-        gfx,
         DELTA_TIME,
     )
 }
 
-fn init<'world>(gfx: &mut Graphics) -> State<'world> {
+fn init<'a>(gfx: &mut Graphics) -> State<'a> {
     State {
-        world: create_world(gfx),
+        world: create_world(),
         frame: 0,
+        texture_manager: graphics::TextureManager::new(gfx),
     }
 }
 
-fn update<'world>(app: &mut App, state: &mut State<'world>) {
+fn update(app: &mut App, state: &mut State) {
     let _guard = tch::no_grad_guard(); // disable gradient calculation
     state.world.update();
     state.frame += 1;
     if state.frame % 120 == 0 {
-        let mut yaal = creature::Yaal::new_random(&mut state.world);
+        let mut yaal = creature::Yaal::new_random(state);
         yaal.set_position(
             state.world.random.gen_range(50. ..250.),
             state.world.random.gen_range(50. ..250.),
         );
-        state.world.add_entity(&mut yaal);
+        state.world.add_entity(Box::new(yaal));
     }
 }
 
-fn draw<'world>(gfx: &mut Graphics, state: &mut State<'world>) {
+fn draw(gfx: &mut Graphics, state: &mut State) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
     state.world.draw(&mut draw);
 }
- 

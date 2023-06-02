@@ -1,7 +1,7 @@
 use std::path;
 
+use crate::State;
 use crate::constants;
-use crate::graphics::image_texture;
 use crate::graphics::Drawable;
 use crate::utils;
 use crate::world;
@@ -25,8 +25,8 @@ use world::WorldObject;
 const YAAL_SPRITE: &str = "hex.png";
 
 /// Trait that allows to create a new object with random values
-pub trait RandomInit<W> {
-    fn new_random(world: &mut W) -> Self;
+pub trait RandomInit {
+    fn new_random(state : &mut State) -> Self;
 }
 
 trait MovingObject {
@@ -316,35 +316,36 @@ struct YaalState {
 
 #[derive(Debug)]
 /// A little creature
-pub struct Yaal {
+pub struct Yaal<'a> {
     internal_state: YaalState,
     entity: world::Entity,
     genome: YaalGenome,
-    sprite: Texture,
+    sprite: &'a Texture,
 }
 
 // #### Random init ####
-impl<T> RandomInit<World<'_>> for T
+impl<T> RandomInit for T
 where
     T: EnumFromRepr + strum::EnumCount,
 {
-    fn new_random(world: &mut World) -> Self {
-        let repr = world.random.gen_range(0..T::COUNT);
+    fn new_random(state: &mut State) -> Self {
+        let repr = state.world.random.gen_range(0..T::COUNT);
         T::from_repr(repr).unwrap()
     }
 }
 
-impl RandomInit<World<'_>> for DistancePenalty {
-    fn new_random(world: &mut World) -> Self {
+impl RandomInit for DistancePenalty {
+    fn new_random(state: &mut State) -> Self {
         DistancePenalty {
-            weight: world.random.gen_range(0. ..1.),
-            ptype: PenaltyType::new_random(world),
+            weight: state.world.random.gen_range(0. ..1.),
+            ptype: PenaltyType::new_random(state),
         }
     }
 }
 
-impl RandomInit<World<'_>> for YaalVectorBrain {
-    fn new_random(world: &mut World) -> Self {
+impl RandomInit for YaalVectorBrain {
+    fn new_random(state: &mut State) -> Self {
+        let mut world = state.world;
         let device = world.device;
         let direction_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
         let speed_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
@@ -352,10 +353,10 @@ impl RandomInit<World<'_>> for YaalVectorBrain {
             &[world.channels, YaalAction::NB_ACTIONS],
             (Kind::Float, device),
         );
-        let decision_sampling = DecisionSampling::new_random(world);
-        let direction_distance_penalty = DistancePenalty::new_random(world);
-        let speed_distance_penalty = DistancePenalty::new_random(world);
-        let decision_distance_penalty = DistancePenalty::new_random(world);
+        let decision_sampling = DecisionSampling::new_random(state);
+        let direction_distance_penalty = DistancePenalty::new_random(state);
+        let speed_distance_penalty = DistancePenalty::new_random(state);
+        let decision_distance_penalty = DistancePenalty::new_random(state);
         let rand_direction_norm = world.random.gen_range(0. ..1.);
         YaalVectorBrain {
             device,
@@ -371,12 +372,13 @@ impl RandomInit<World<'_>> for YaalVectorBrain {
     }
 }
 
-impl RandomInit<World<'_>> for YaalGenome {
-    fn new_random(world: &mut World) -> YaalGenome {
+impl RandomInit for YaalGenome {
+    fn new_random(state: &mut State) -> YaalGenome {
+        let mut world = state.world;
         let max_speed = world.random.gen_range(0. ..1.);
         let field_of_view = world.random.gen_range(0..=constants::MAX_FOV);
         let max_size = world.random.gen_range(1..=constants::MAX_SIZE);
-        let brain = YaalVectorBrain::new_random(world);
+        let brain = YaalVectorBrain::new_random(state);
         YaalGenome {
             brain,
             max_speed,
@@ -399,23 +401,23 @@ impl YaalState {
     }
 }
 
-impl RandomInit<World<'_>> for Yaal {
-    fn new_random(world: &mut World) -> Yaal {
-        let genome = YaalGenome::new_random(world);
-        let state = YaalState::new(&genome);
+impl<'a> RandomInit for Yaal<'a> {
+    fn new_random(state: &mut State) -> Yaal<'a> {
+        let genome = YaalGenome::new_random(state);
+        let yaal_state = YaalState::new(&genome);
         let body =
             tch::vision::image::load(path::Path::new("assets").join("sprites").join(YAAL_SPRITE))
                 .unwrap();
         Yaal {
-            internal_state: state,
+            internal_state: yaal_state,
             entity: Entity::new(body),
             genome,
-            sprite: image_texture(YAAL_SPRITE, world.gfx),
+            sprite: state.texture_manager.get(YAAL_SPRITE),
         }
     }
 }
 
-impl MovingObject for Yaal {
+impl<'a> MovingObject for Yaal<'a> {
     delegate! {
         to self.entity {
             fn position(&self) -> Vec2;
@@ -429,7 +431,7 @@ impl MovingObject for Yaal {
 }
 
 // Allows Yaal to be used as a WorldObject (therefore to be added and interact with the world)
-impl<'world> WorldObject<World<'world>> for Yaal {
+impl<'a> WorldObject<World> for Yaal<'a> {
     delegate! {
         to self.entity {
             fn position(&self) -> Vec2;
@@ -458,7 +460,7 @@ impl<'world> WorldObject<World<'world>> for Yaal {
     }
 }
 
-impl Drawable for Yaal {
+impl<'a> Drawable for Yaal<'a> {
     fn draw(&self, draw: &mut Draw) {
         let size = self.size();
         draw.image(&self.sprite)
