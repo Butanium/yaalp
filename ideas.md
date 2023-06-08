@@ -15,3 +15,6 @@
 ## Optimization (not for now)
 
 - Parallelize creature evaluations (big matmul instead of a lot matmul). First we'd need to parallelize the evaluation of 1 creature I think
+
+## rust
+- use clippy (demander à pigeon)

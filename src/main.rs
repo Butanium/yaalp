@@ -1,62 +1,103 @@
+use graphics::sprite_textures;
+use graphics::Drawable;
 use notan::draw::*;
 use notan::prelude::*;
+use world::State;
 mod constants;
 mod creature;
+mod graphics;
 mod utils;
 mod world;
 use crate::creature::RandomInit;
 use crate::world::World;
-use tch::IndexOp;
 
-// #[notan_main] // uncomment to test notan window
+const WIDTH: u32 = 700;
+const HEIGHT: u32 = 700;
+const DELTA_TIME: f32 = 1. / 60.;
+
+#[derive(AppState)]
+struct GameState {
+    world: World,
+    world_state: State,
+    frame: usize,
+    font: Font,
+}
+
+#[notan_main]
 fn main() -> Result<(), String> {
+    // let win_config = WindowConfig::new().size(WIDTH, HEIGHT).vsync(true);
+    let win_config = WindowConfig::new().set_size(WIDTH, HEIGHT).set_vsync(true);
+    let _guard = tch::no_grad_guard(); // disable gradient calculation
+
+    notan::init_with(init)
+        .add_config(win_config)
+        .add_config(DrawConfig)
+        .update(update)
+        .draw(draw)
+        .build()
+}
+
+fn create_world() -> World {
     let device = if tch::Cuda::is_available() {
         tch::Device::Cuda(0)
     } else {
         tch::Device::Cpu
     };
-    let _guard = tch::no_grad_guard(); // disable gradient calculation
     println!("Device used: {:?}", device);
-    let seed = rand::random();
-    println!("Seed used: {:?}", seed);
-    // Create a dummy world
-    let mut world = World::new(
+
+    // RGB World
+    World::new(
+        WIDTH as i64,
+        HEIGHT as i64,
         3,
-        3,
-        2,
-        2,
-        &[0.5, 0.9],
-        &[10., 10.],
+        constants::MAX_FOV,
+        &[0., 0., 0.],
+        &[255., 255., 255.],
         device,
         tch::Kind::Float,
-        seed,
-    );
-    // Create some dummy creatures
-    let square = world::Square::new(2, &world);
-    let yaal = creature::Yaal::new_random(&mut world);
-    world.add_entity(&yaal);
-    println!("Our Yaal: {:#?}", yaal);
-    world.add_entity(&square);
-    world.print();
-    for i in 0..3 {
-        world.update();
-        println!("\nAfter update{:?}:", i);
-        world.print();
-    }
-    // dummy return value
-    Ok(())
-    // notan::init().draw(draw).add_config(DrawConfig).build()
+        DELTA_TIME,
+    )
 }
-#[test]
-fn smoke_test() {
-    for _ in 0..100 {
-        main().unwrap();
+
+fn init(gfx: &mut Graphics) -> GameState {
+    let seed = rand::random();
+    tch::manual_seed(seed as i64);
+    GameState {
+        world: create_world(),
+        frame: 0,
+        world_state: State::new(seed, sprite_textures(gfx)),
+        font: gfx
+            .create_font(include_bytes!("./assets/fonts/Ubuntu-B.ttf"))
+            .unwrap(),
     }
 }
-// notan example
-// fn draw(gfx: &mut Graphics) {
-//     let mut draw = gfx.create_draw();
-//     draw.clear(Color::BLACK);
-//     draw.triangle((400.0, 100.0), (100.0, 500.0), (700.0, 500.0));
-//     gfx.render(&draw);
-// }
+
+fn update(app: &mut App, state: &mut GameState) {
+    if app.mouse.was_pressed(MouseButton::Left) {
+        let (mx, my) = app.mouse.position();
+        let yaal = creature::Yaal::new_random(&state.world, &mut state.world_state);
+        yaal.spawn(mx, my, &mut state.world);
+    }
+    let _guard = tch::no_grad_guard(); // disable gradient calculation
+    state.world.update(&mut state.world_state);
+    state.frame += 1;
+}
+
+fn draw(app: &mut App, gfx: &mut Graphics, state: &mut GameState) {
+    let mut draw = gfx.create_draw();
+    draw.clear(Color::BLACK);
+    draw.image(state.world_state.get_texture(constants::BACKGROUND_SPRITE))
+        .size(WIDTH as f32, HEIGHT as f32);
+    state.world.draw(&mut draw, &state.world_state);
+    draw.text(
+        &state.font,
+        &format!(
+            "FPS : {}\nCreatures: {}",
+            app.timer.fps().round(),
+            state.world.num_objects()
+        ),
+    )
+    .position(10.0, 10.0)
+    .size(24.0);
+    gfx.render(&draw);
+}

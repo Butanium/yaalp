@@ -1,19 +1,43 @@
-use crate::constants;
+use crate::constants::*;
+use crate::graphics::sprite_path;
+use crate::graphics::Drawable;
 use crate::utils;
 use crate::world;
+use crate::world::Entity;
+use crate::world::State;
+use delegate::delegate;
+use notan::draw::Draw;
+use notan::draw::DrawImages;
+use notan::math::Vec2;
 use rand::rngs::StdRng;
 use rand::Rng;
 use strum_macros::{EnumCount, FromRepr};
 use tch::IndexOp;
 use tch::{Kind, Tensor};
 use utils::EnumFromRepr;
-use utils::Position;
 use world::World;
 use world::WorldObject;
 
 /// Trait that allows to create a new object with random values
-pub trait RandomInit<W> {
-    fn new_random(world: &mut W) -> Self;
+pub trait RandomInit {
+    fn new_random(world: &World, state: &mut State) -> Self;
+}
+
+/// Trait for objects that can move
+trait MovingObject {
+    /// Returns the current position of the object
+    fn position(&self) -> Vec2;
+    /// Sets the position of the object to the given coordinates
+    fn set_position(&mut self, x: f32, y: f32);
+    /// Returns the direction of the object's movement
+    fn direction(&self) -> Vec2;
+    /// Returns the speed of the object's movement
+    fn speed(&self) -> f32;
+    /// Updates the position of the object based on its direction and speed
+    fn update_pos(&mut self, delta: f32) {
+        let new_pos = self.position() + self.direction() * self.speed() * delta;
+        self.set_position(new_pos.x, new_pos.y);
+    }
 }
 
 /// Trait for a creature's brain
@@ -157,35 +181,52 @@ impl YaalAction {
 /// A brain which decision are mostly based on scalar products
 struct YaalVectorBrain {
     device: tch::Device,
-    /// Tensor of shape [world_channels]
+    /// Tensor of shape [world_channels] that contains the weights for the scalar product
     direction_weights: Tensor,
     /// Tensor of shape [world_channels]
     speed_weights: Tensor,
+    /// Bias for the scalar product
+    speed_bias: f32,
     /// Tensor of shape [world_channels, nb_actionss]
     decision_weights: Tensor,
+    /// Bias for the scalar product [nb_actions]
+    decision_bias: Tensor,
+    /// The type of decision sampling used to choose an action
     decision_sampling: DecisionSampling,
+    /// The distance penalty function for the direction
     direction_distance_penalty: DistancePenalty,
+    /// The distance penalty function for the speed
     speed_distance_penalty: DistancePenalty,
+    /// The distance penalty function for the decision
     decision_distance_penalty: DistancePenalty,
-    rand_direction_norm: f64,
+    /// The norm of the random vector used to add noise to the direction
+    rand_direction_norm: f32,
 }
 
 #[derive(Debug)]
 /// A decision made by a Yaal
 struct YaalDecision {
     action: YaalAction,
-    direction: Position<f64>,
-    speed_factor: f64,
+    direction: Vec2,
+    speed_factor: f32,
+}
+impl YaalDecision {
+    /// Apply the decision to the Yaal
+    fn apply(&self, yaal: &mut Yaal) {
+        // TODO: Implement actions
+        match self.action {
+            YaalAction::Attack => (),
+            YaalAction::Reproduce => (),
+            YaalAction::Nop => (),
+        }
+        yaal.entity.set_direction(self.direction);
+        yaal.entity.speed = yaal.genome.max_speed * self.speed_factor;
+    }
 }
 
 impl YaalVectorBrain {
     /// Get the preferred direction of the Yaal
-    fn get_direction(
-        &self,
-        input_view: &Tensor,
-        rand_norm: f64,
-        random: &mut StdRng,
-    ) -> Position<f64> {
+    fn get_direction(&self, input_view: &Tensor, rand_norm: f32, random: &mut StdRng) -> Vec2 {
         let dist_mask = self
             .direction_distance_penalty
             .get_direction_mask(self.device, input_view.size()[1]);
@@ -207,16 +248,17 @@ impl YaalVectorBrain {
             (Kind::Float, self.device),
         );
         let xy = Tensor::meshgrid(&[&x, &x]);
-        let x = &xy[0]; // because the mask is divided by dist, this is actually x/direction_norm
-                        // The /direction_norm is necessary otherwise longer directions would be favored
+        // x[i,j] = i
+        let x = &xy[0];
+        // y[i,j] = j
         let y = &xy[1];
-        let dir_x = ((x * &eval) - center).mean(Kind::Float);
-        let dir_y = ((y * &eval) - center).mean(Kind::Float);
-        let rand_dir = Position::<f64>::new(random.gen_range(0. ..1.), random.gen_range(0. ..1.))
+        let dir_x = ((x - center) * &eval).mean(Kind::Float);
+        let dir_y = ((y - center) * &eval).mean(Kind::Float);
+        let rand_dir = Vec2::new(random.gen_range(-1. ..1.), random.gen_range(-1. ..1.))
             .normalize()
             * rand_norm;
-        let raw_dir: Position<f64> = Position::<f64>::new(dir_x.into(), dir_y.into()) + rand_dir;
-        raw_dir.normalize()
+        let raw_dir = Vec2::new(dir_x.into(), dir_y.into()) + rand_dir;
+        raw_dir.normalize_or_zero()
     }
 
     /// Get the preferred speed of the Yaal
@@ -233,12 +275,12 @@ impl YaalVectorBrain {
             .transpose_(0, 1)
             .matmul(&self.decision_weights);
         eval *= mask;
-        let logits = eval.mean_dim(Some([0].as_slice()), false, Kind::Float);
+        let logits = eval.mean_dim(Some([0].as_slice()), false, Kind::Float) + &self.decision_bias;
         YaalAction::from_index(self.decision_sampling.logits_to_index(&logits))
     }
 
     /// Get the preferred speed factor of the Yaal
-    fn get_speed_factor(&self, input_view: &Tensor) -> f64 {
+    fn get_speed_factor(&self, input_view: &Tensor) -> f32 {
         let mask = self
             .speed_distance_penalty
             .get_mask(self.device, input_view.size()[1])
@@ -249,7 +291,8 @@ impl YaalVectorBrain {
             .transpose_(0, 1)
             .matmul(&self.speed_weights);
         eval *= mask;
-        utils::sigmoid(eval.mean(Kind::Float).into())
+        let eval: f32 = eval.mean(Kind::Float).into();
+        utils::sigmoid(eval + self.speed_bias)
     }
 }
 impl Brain<Tensor, YaalDecision> for YaalVectorBrain {
@@ -268,9 +311,10 @@ impl Brain<Tensor, YaalDecision> for YaalVectorBrain {
 /// Contains all the genetic information of a Yaal
 struct YaalGenome {
     brain: YaalVectorBrain,
-    max_speed: f64,
+    max_speed: f32,
     field_of_view: i64,
-    max_size: i64,
+    max_size: f32,
+    init_size: f32,
 }
 
 #[derive(Debug)]
@@ -278,7 +322,6 @@ struct YaalGenome {
 struct YaalState {
     health: f64,
     max_health: f64,
-    size: i64,
     energy: f64,
     max_energy: f64,
     age: f64,
@@ -290,31 +333,31 @@ pub struct Yaal {
     internal_state: YaalState,
     entity: world::Entity,
     genome: YaalGenome,
+    sprite: String,
 }
 
 // #### Random init ####
-
-impl<T> RandomInit<World<'_>> for T
+impl<T> RandomInit for T
 where
     T: EnumFromRepr + strum::EnumCount,
 {
-    fn new_random(world: &mut World) -> Self {
-        let repr = world.random.gen_range(0..T::COUNT);
+    fn new_random(_world: &World, state: &mut State) -> Self {
+        let repr = state.random.gen_range(0..T::COUNT);
         T::from_repr(repr).unwrap()
     }
 }
 
-impl RandomInit<World<'_>> for DistancePenalty {
-    fn new_random(world: &mut World) -> Self {
+impl RandomInit for DistancePenalty {
+    fn new_random(world: &World, state: &mut State) -> Self {
         DistancePenalty {
-            weight: world.random.gen_range(0. ..1.),
-            ptype: PenaltyType::new_random(world),
+            weight: state.random.gen_range(0. ..1.),
+            ptype: PenaltyType::new_random(world, state),
         }
     }
 }
 
-impl RandomInit<World<'_>> for YaalVectorBrain {
-    fn new_random(world: &mut World) -> Self {
+impl RandomInit for YaalVectorBrain {
+    fn new_random(world: &World, state: &mut State) -> Self {
         let device = world.device;
         let direction_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
         let speed_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
@@ -322,16 +365,18 @@ impl RandomInit<World<'_>> for YaalVectorBrain {
             &[world.channels, YaalAction::NB_ACTIONS],
             (Kind::Float, device),
         );
-        let decision_sampling = DecisionSampling::new_random(world);
-        let direction_distance_penalty = DistancePenalty::new_random(world);
-        let speed_distance_penalty = DistancePenalty::new_random(world);
-        let decision_distance_penalty = DistancePenalty::new_random(world);
-        let rand_direction_norm = world.random.gen_range(0. ..1.);
+        let decision_sampling = DecisionSampling::new_random(world, state);
+        let direction_distance_penalty = DistancePenalty::new_random(world, state);
+        let speed_distance_penalty = DistancePenalty::new_random(world, state);
+        let decision_distance_penalty = DistancePenalty::new_random(world, state);
+        let rand_direction_norm = state.random.gen_range(0. ..1.);
         YaalVectorBrain {
             device,
             direction_weights,
             speed_weights,
+            speed_bias: Tensor::randn(&[], (Kind::Float, device)).into(),
             decision_weights,
+            decision_bias: Tensor::randn(&[YaalAction::NB_ACTIONS], (Kind::Float, device)),
             decision_sampling,
             direction_distance_penalty,
             speed_distance_penalty,
@@ -341,16 +386,18 @@ impl RandomInit<World<'_>> for YaalVectorBrain {
     }
 }
 
-impl RandomInit<World<'_>> for YaalGenome {
-    fn new_random(world: &mut World) -> YaalGenome {
-        let max_speed = world.random.gen_range(0. ..1.);
-        let field_of_view = world.random.gen_range(0..=constants::MAX_FOV);
-        let max_size = world.random.gen_range(1..=constants::MAX_SIZE);
-        let brain = YaalVectorBrain::new_random(world);
+impl RandomInit for YaalGenome {
+    fn new_random(world: &World, state: &mut State) -> YaalGenome {
+        let max_speed = state.random.gen_range(0. ..MAX_SPEED);
+        let field_of_view = state.random.gen_range(0..=MAX_FOV);
+        let max_size = state.random.gen_range(MIN_SIZE..=MAX_SIZE);
+        let init_size = state.random.gen_range(MIN_SIZE..=max_size);
+        let brain = YaalVectorBrain::new_random(world, state);
         YaalGenome {
             brain,
             max_speed,
             field_of_view,
+            init_size,
             max_size,
         }
     }
@@ -358,63 +405,86 @@ impl RandomInit<World<'_>> for YaalGenome {
 
 impl YaalState {
     /// TODO: Take into account the genome
-    fn new(genome: &YaalGenome) -> YaalState {
+    fn new(_genome: &YaalGenome) -> YaalState {
         YaalState {
             health: 1.,
             max_health: 1.,
             energy: 1.,
-            size: 1,
             max_energy: 1.,
             age: 0.,
         }
     }
 }
 
-impl RandomInit<World<'_>> for Yaal {
-    fn new_random(world: &mut World) -> Yaal {
-        let genome = YaalGenome::new_random(world);
-        let state = YaalState::new(&genome);
-        // Todo proper body init
-        let square = world::Square::new(state.size, &world);
+impl RandomInit for Yaal {
+    fn new_random(world: &World, state: &mut State) -> Yaal {
+        let genome = YaalGenome::new_random(world, state);
+        let yaal_state = YaalState::new(&genome);
+        let body = tch::vision::image::load(sprite_path(YAAL_SPRITE))
+            .unwrap()
+            .to(world.device);
+        let mut entity = Entity::new(body);
+        entity.set_size(genome.init_size, genome.init_size);
         Yaal {
-            internal_state: state,
-            entity: square.entity,
+            internal_state: yaal_state,
+            entity,
             genome,
+            sprite: YAAL_SPRITE.to_string(),
         }
     }
 }
 
-// Allows Yaal to be used as a WorldObject (therefore to be added and interact with the world)
-impl<'world> WorldObject<World<'world>> for Yaal {
-    fn position(&self) -> Position<f64> {
-        self.entity.position()
-    }
-
-    fn set_position(&mut self, x: f64, y: f64) {
+impl Yaal {
+    pub fn spawn(mut self, x: f32, y: f32, world: &mut World) {
         self.entity.set_position(x, y);
+        world.bound_position(&mut self.entity);
+        world.add_entity(Box::new(self));
     }
+}
 
-    fn world_pos(&self) -> Position<i64> {
-        self.entity.world_pos()
+impl MovingObject for Yaal {
+    delegate! {
+        to self.entity {
+            fn position(&self) -> Vec2;
+            fn set_position(&mut self, x: f32, y: f32);
+            fn direction(&self) -> Vec2;
+        }
     }
-
-    fn add_to_map(&self, world: &World) {
-        self.entity.add_to_map(world)
+    fn speed(&self) -> f32 {
+        self.entity.speed
     }
+}
 
-    fn update(&self, world: &mut World) {
+// Allows Yaal to be used as a WorldObject (therefore to be added and interact with the world)
+impl WorldObject<World> for Yaal {
+    delegate! {
+        to self.entity {
+            fn position(&self) -> Vec2;
+            fn set_position(&mut self, x: f32, y: f32);
+            fn add_to_map(&self, world: &World);
+            fn size(&self) -> Vec2;
+        }
+    }
+    fn update(&mut self, world: &World, state: &mut State) {
         let sensory_input = world.get_observation(
-            (self.entity.position() + (self.internal_state.size as f64 / 2.)).round(),
+            self.entity.position(),
             self.genome.field_of_view,
-            self.internal_state.size,
+            self.entity.size(),
         );
-        println!(
-            "Yaal input: {:#?}\nshape: {:#?}",
-            sensory_input,
-            sensory_input.size()
-        );
-        let output = self.genome.brain.evaluate(sensory_input, &mut world.random);
+        let output = self.genome.brain.evaluate(sensory_input, &mut state.random);
+        output.apply(self);
+        self.update_pos(world.delta_time);
+        world.bound_position(&mut self.entity);
         // TODO use output to update the Yaal
         println!("Yaal action: {:#?}", output);
+    }
+}
+
+impl Drawable for Yaal {
+    fn draw(&self, draw: &mut Draw, state: &State) {
+        let size = self.size();
+        draw.image(state.get_texture(&self.sprite))
+            .position(self.entity.position().x, self.entity.position().y)
+            .size(size.x, size.y);
     }
 }
