@@ -1033,20 +1033,6 @@ dependencies = [
 
 [[package]]
 name = "image"
-version = "0.23.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24ffcb7e7244a9bf19d35bf2883b9c080c4ced3c07a9895572178cdb8f13f6a1"
-dependencies = [
- "bytemuck",
- "byteorder",
- "color_quant",
- "num-iter",
- "num-rational 0.3.2",
- "num-traits",
-]
-
-[[package]]
-name = "image"
 version = "0.24.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "527909aa81e20ac3a44803521443a765550f09b5130c2c2fa1ea59c2f8f50a3a"
@@ -1055,7 +1041,7 @@ dependencies = [
  "byteorder",
  "color_quant",
  "jpeg-decoder",
- "num-rational 0.4.1",
+ "num-rational",
  "num-traits",
  "png",
 ]
@@ -1254,15 +1240,6 @@ dependencies = [
 
 [[package]]
 name = "matrixmultiply"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "916806ba0031cd542105d916a97c8572e1fa6dd79c9c51e7eb43a09ec2dd84c1"
-dependencies = [
- "rawpointer",
-]
-
-[[package]]
-name = "matrixmultiply"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "090126dc04f95dc0d1c1c91f61bdd474b3930ca064c1edc8a849da2c6cbe1e77"
@@ -1340,38 +1317,15 @@ dependencies = [
 
 [[package]]
 name = "ndarray"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c0d5c9540a691d153064dc47a4db2504587a75eae07bf1d73f7a596ebc73c04"
-dependencies = [
- "matrixmultiply 0.2.4",
- "num-complex 0.3.1",
- "num-integer",
- "num-traits",
- "rawpointer",
-]
-
-[[package]]
-name = "ndarray"
 version = "0.15.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb12d4e967ec485a5f71c6311fe28158e9d6f4bc4a447b474184d0f91a8fa32"
 dependencies = [
- "matrixmultiply 0.3.7",
- "num-complex 0.4.3",
+ "matrixmultiply",
+ "num-complex",
  "num-integer",
  "num-traits",
  "rawpointer",
-]
-
-[[package]]
-name = "ndarray-image"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3437a164d41649377b168f30af3e7beef3a1b6573ab61b24aaf38659e88f335"
-dependencies = [
- "image 0.23.14",
- "ndarray 0.14.0",
 ]
 
 [[package]]
@@ -1538,7 +1492,7 @@ dependencies = [
  "bytemuck",
  "glow",
  "hashbrown 0.13.2",
- "image 0.24.6",
+ "image",
  "js-sys",
  "log",
  "notan_graphics",
@@ -1567,7 +1521,7 @@ source = "git+https://github.com/Nazariglez/notan?branch=develop#3a1bdc1cd2cddb9
 dependencies = [
  "bytemuck",
  "crevice_notan",
- "image 0.24.6",
+ "image",
  "notan_macro",
  "notan_math",
  "notan_utils",
@@ -1680,7 +1634,7 @@ source = "git+https://github.com/Nazariglez/notan?branch=develop#3a1bdc1cd2cddb9
 dependencies = [
  "glutin",
  "glutin-winit",
- "image 0.24.6",
+ "image",
  "log",
  "notan_app",
  "notan_core",
@@ -1696,10 +1650,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43db66d1170d347f9a065114077f7dccb00c1b9478c89384490a3425279a4606"
 dependencies = [
  "num-bigint",
- "num-complex 0.4.3",
+ "num-complex",
  "num-integer",
  "num-iter",
- "num-rational 0.4.1",
+ "num-rational",
  "num-traits",
 ]
 
@@ -1711,15 +1665,6 @@ checksum = "f93ab6289c7b344a8a9f60f88d80aa20032336fe78da341afc91c8a2341fc75f"
 dependencies = [
  "autocfg",
  "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-complex"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "747d632c0c558b87dbabbe6a82f3b4ae03720d0646ac5b7b4dae89394be5f2c5"
-dependencies = [
  "num-traits",
 ]
 
@@ -1747,17 +1692,6 @@ name = "num-iter"
 version = "0.1.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d03e6c028c5dc5cac6e2dec0efda81fc887605bb3d884578bb6d6bf7514e252"
-dependencies = [
- "autocfg",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-rational"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12ac428b1cb17fce6f731001d307d351ec70a6d202fc2e60f7d4c5e42d8f4f07"
 dependencies = [
  "autocfg",
  "num-integer",
@@ -2398,7 +2332,7 @@ dependencies = [
  "half",
  "lazy_static",
  "libc",
- "ndarray 0.15.6",
+ "ndarray",
  "rand",
  "thiserror",
  "torch-sys",
@@ -3047,7 +2981,6 @@ name = "yaalp"
 version = "0.1.0"
 dependencies = [
  "delegate",
- "ndarray-image",
  "notan",
  "rand",
  "strum",
