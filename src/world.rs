@@ -21,6 +21,7 @@ pub struct Entity {
     pub speed: f32,
 }
 
+/// An entity that has a body and can move
 impl Entity {
     /// Create a new entity with `base_body`
     pub fn new(body: Tensor) -> Self {
@@ -34,6 +35,16 @@ impl Entity {
         }
     }
 
+    /// Sets the size of the entity and resizes its body tensor accordingly.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - The new width of the entity.
+    /// * `height` - The new height of the entity.
+    ///
+    /// # Note
+    ///
+    /// The body tensor is resized on the CPU and then moved back to the device it was on before.
     pub fn set_size(&mut self, width: f32, height: f32) {
         self.size = Vec2::new(width, height);
         self.scaled_body = tch::vision::image::resize(
@@ -45,10 +56,20 @@ impl Entity {
         .to(self.body.device());
     }
 
+    /// Sets the direction of the entity.
+    ///
+    /// # Arguments
+    ///
+    /// * `direction` - The new direction of the entity.
+    ///
+    /// # Note
+    ///
+    /// The direction is normalized. If the direction is zero, it is set to (0, 0).
     pub fn set_direction(&mut self, direction: Vec2) {
         self.direction = direction.normalize_or_zero();
     }
 
+    /// Returns the direction of the entity.
     pub fn direction(&self) -> Vec2 {
         self.direction
     }
@@ -60,10 +81,15 @@ impl Drawable for Entity {
 
 /// The WorldObject trait is implemented for entities that can be added to the world.
 pub trait WorldObject<W>: Drawable {
+    /// Returns the position of the object.
     fn position(&self) -> Vec2;
+    /// Sets the position of the object.
     fn set_position(&mut self, x: f32, y: f32);
+    /// Add the object to the world map.
     fn add_to_map(&self, world: &W);
+    /// Update the object.
     fn update(&mut self, _world: &W, _state: &mut State) {}
+    /// Returns the size of the object.
     fn size(&self) -> Vec2;
 }
 
@@ -76,7 +102,6 @@ impl WorldObject<World> for Entity {
         self.position = Vec2::new(x, y);
     }
 
-    /// Add the entity to the world map.
     fn add_to_map(&self, world: &World) {
         let mut view = world.get_submap(
             self.position(),
@@ -91,30 +116,54 @@ impl WorldObject<World> for Entity {
     }
 }
 
+/// The world represents the game world.
 pub struct World {
+    /// The world map is a (channels, height + 2 * max_field_of_view, width + 2 * max_field_of_view) tensor.
+    /// Each channel represents a different aspect of the world (RGB, temperature, etc.).
     map: Tensor,
+    /// The objects in the world. They will be updated and drawn every time the world is updated.
     objects: RefCell<Vec<Box<dyn WorldObject<World>>>>,
     height: i64,
     width: i64,
     pub channels: i64,
+    /// The decay tensor is a (channels) tensor that represents how much each channel decays before entities are added to the world.
     decays: Tensor,
+    /// The max_values tensor is a (channels) tensor that represents the maximum value of each channel.
     max_values: Tensor,
+    /// The device on which the world map is stored.
     pub device: tch::Device,
+    /// The maximum distance that an entity can see in each direction.
     max_field_of_view: i64,
     pub delta_time: f32,
 }
 
+/// The State struct represents the current state of the game.
 pub struct State {
+    /// The random number generator used by the game.
     pub random: rand::rngs::StdRng,
+    /// The textures used by the game.
     textures: HashMap<String, Texture>,
 }
+
 impl State {
+    /// Creates a new State object.
+    ///
+    /// # Arguments
+    ///
+    /// * `seed` - The seed for the random number generator.
+    /// * `textures` - The textures used by the game.
     pub fn new(seed: u64, textures: HashMap<String, Texture>) -> Self {
         State {
             random: rand::SeedableRng::seed_from_u64(seed),
             textures,
         }
     }
+
+    /// Returns the texture with the given name.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the texture to get.
     pub fn get_texture(&self, name: &str) -> &Texture {
         self.textures.get(name).unwrap()
     }
@@ -135,9 +184,7 @@ impl State {
 /// The World struct provides methods for adding entities to the world, getting views of the world from a certain position,
 /// and updating the values in the world based on the decay and max value tensors.
 impl World {
-    pub fn add_entity(&mut self, object: Box<dyn WorldObject<World>>) {
-        self.objects.borrow_mut().push(object.into());
-    }
+    /// Creates a new World
     pub fn new(
         width: i64,
         height: i64,
@@ -182,30 +229,42 @@ impl World {
         }
     }
 
-    /// Given a map with a certain field of view, get_observation returns a tensor
-    /// that represents the view of the map from the given position.
-    /// The position is the center of the view.
+    /// Adds an entity to the world. The entity will be updated / drawn every time the world is updated / drawn.
     ///
-    /// The tensor has dimensions (channels, 2 * field_of_view + 1, 2 * field_of_view + 1)
-    /// and contains the values of the map in the corresponding positions.
+    /// # Arguments
     ///
-    /// For example, if the map is (max field of view = 2):
+    /// * `object` - The entity to add to the world.
+    pub fn add_entity(&mut self, object: Box<dyn WorldObject<World>>) {
+        self.objects.borrow_mut().push(object.into());
+    }
+
+    /// Returns the number of world objects in the world.
+    pub fn num_objects(&self) -> usize {
+        self.objects.borrow().len()
+    }
+
+    /// Returns a submap of which top left point is in position
+    /// The returned tensor has dimensions (channels, side_length, side_length).
+    pub fn get_submap(&self, position: Vec2, width: i64, height: i64) -> Tensor {
+        self.map
+            .narrow(
+                1,
+                position.y.round() as i64 + self.max_field_of_view,
+                height,
+            )
+            .narrow(2, position.x.round() as i64 + self.max_field_of_view, width)
+    }
+
+    /// Returns a view of the world from the given position and field of view.
     ///
-    /// 0 0 0 0 0 0 0
-    /// 0 0 0 0 0 0 0
-    /// 0 0 1 1 P 0 0
-    /// 0 0 1 2 1 0 0
-    /// 0 0 1 1 1 0 0
-    /// 0 0 0 0 0 0 0
-    /// 0 0 0 0 0 0 0
-    /// and the position is P (2,2) with a field of view of 1, then the tensor returned
-    /// will be:
+    /// # Arguments
     ///
-    /// 0 0 0
-    /// 1 P 0
-    /// 2 1 0
+    /// * `position` - The position of the top left corner of the entity that is getting the view.
+    /// * `field_of_view` - The maximum distance that the view can extend in each direction.
+    /// * `size` - The size of the entity that is getting the view.
     ///
-    /// which corresponds to the view of the map from the position P with a field of view of 1.
+    /// The returned tensor has dimensions (channels, 2 * field_of_view + size.y.ceil(), 2 * field_of_view + size.x.ceil()).
+    /// Changes to the returned tensor will be reflected in the world map.
     pub fn get_observation(&self, position: Vec2, field_of_view: i64, size: Vec2) -> Tensor {
         self.map
             .narrow(
@@ -219,18 +278,6 @@ impl World {
                 2 * field_of_view + size.x.ceil() as i64,
             )
     }
-    /// Returns a submap of which top left point is in position
-    /// The returned tensor has dimensions (channels, side_length, side_length).
-    pub fn get_submap(&self, position: Vec2, width: i64, height: i64) -> Tensor {
-        self.map
-            .narrow(
-                1,
-                position.y.round() as i64 + self.max_field_of_view,
-                height,
-            )
-            .narrow(2, position.x.round() as i64 + self.max_field_of_view, width)
-    }
-
     /// Update the position of an entity so that it is within the bounds of the world.
     pub fn bound_position(&self, entity: &mut Entity) {
         // The anchor point of the entity is the top left corner
@@ -254,9 +301,11 @@ impl World {
         }
     }
 
+    /// Print the world map
     pub fn print(&self) {
         self.map.print()
     }
+
     /// Update the world
     pub fn update(&mut self, state: &mut State) {
         // let objects = self.objects.clone(); // To allow to pass a mutable ref of world in objects update
