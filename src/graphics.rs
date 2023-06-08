@@ -7,6 +7,10 @@ use notan::prelude::{Graphics, Texture};
 
 use crate::world::State;
 
+const ASSETS_PATH: &str = "assets";
+const SPRITES_PATH: &str = "sprites";
+const SPRITES: &'static [&str] = &[crate::constants::YAAL_SPRITE, crate::constants::BACKGROUND_SPRITE];
+
 pub trait Drawable {
     fn draw(&self, draw: &mut Draw, state: &State);
 }
@@ -21,10 +25,6 @@ pub trait TextureSprite: Drawable {
             .size(self.size().0, self.size().1);
     }
 }
-
-const ASSETS_PATH: &str = "assets";
-const SPRITES_PATH: &str = "sprites";
-const SPRITES: &'static [&str] = &[&"hex.png"];
 
 pub fn sprite_path(sprite: &str) -> std::path::PathBuf {
     std::path::Path::new("src")
