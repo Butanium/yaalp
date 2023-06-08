@@ -9,7 +9,10 @@ use crate::world::State;
 
 const ASSETS_PATH: &str = "assets";
 const SPRITES_PATH: &str = "sprites";
-const SPRITES: &'static [&str] = &[crate::constants::YAAL_SPRITE, crate::constants::BACKGROUND_SPRITE];
+const SPRITES: &'static [&str] = &[
+    crate::constants::YAAL_SPRITE,
+    crate::constants::BACKGROUND_SPRITE,
+];
 
 pub trait Drawable {
     fn draw(&self, draw: &mut Draw, state: &State);
