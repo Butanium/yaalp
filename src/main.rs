@@ -13,12 +13,14 @@ use crate::world::World;
 
 const WIDTH: u32 = 700;
 const HEIGHT: u32 = 700;
+const DELTA_TIME: f32 = 1. / 60.;
 
 #[derive(AppState)]
 struct GameState {
     world: World,
     world_state: State,
     frame: usize,
+    font: Font,
 }
 
 #[notan_main]
@@ -34,13 +36,7 @@ fn main() -> Result<(), String> {
         .draw(draw)
         .build()
 }
-#[test]
-fn smoke_test() {
-    for _ in 0..100 {
-        main().unwrap();
-    }
-}
-const DELTA_TIME: f32 = 1. / 60.;
+
 fn create_world() -> World {
     let device = if tch::Cuda::is_available() {
         tch::Device::Cuda(0)
@@ -70,26 +66,38 @@ fn init(gfx: &mut Graphics) -> GameState {
         world: create_world(),
         frame: 0,
         world_state: State::new(seed, sprite_textures(gfx)),
+        font: gfx
+            .create_font(include_bytes!("./assets/fonts/Ubuntu-B.ttf"))
+            .unwrap(),
     }
 }
 
-fn update(state: &mut GameState) {
+fn update(app: &mut App, state: &mut GameState) {
+    if app.mouse.was_pressed(MouseButton::Left) {
+        let (mx, my) = app.mouse.position();
+        let yaal = creature::Yaal::new_random(&state.world, &mut state.world_state);
+        yaal.spawn(mx, my, &mut state.world);
+    }
     let _guard = tch::no_grad_guard(); // disable gradient calculation
     state.world.update(&mut state.world_state);
     state.frame += 1;
-    if state.frame % 120 == 0 {
-        let yaal = creature::Yaal::new_random(&state.world, &mut state.world_state);
-        yaal.spawn(
-            state.world_state.random.gen_range(0. ..WIDTH as f32),
-            state.world_state.random.gen_range(50. ..HEIGHT as f32),
-            &mut state.world,
-        );
-    }
 }
 
-fn draw(gfx: &mut Graphics, state: &mut GameState) {
+fn draw(app: &mut App, gfx: &mut Graphics, state: &mut GameState) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
+    draw.image(state.world_state.get_texture(constants::BACKGROUND_SPRITE))
+        .size(WIDTH as f32, HEIGHT as f32);
     state.world.draw(&mut draw, &state.world_state);
+    draw.text(
+        &state.font,
+        &format!(
+            "FPS : {}\nCreatures: {}",
+            app.timer.fps().round(),
+            state.world.num_objects()
+        ),
+    )
+    .position(10.0, 10.0)
+    .size(24.0);
     gfx.render(&draw);
 }
