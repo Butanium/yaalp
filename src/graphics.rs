@@ -9,7 +9,7 @@ use crate::world::State;
 
 const ASSETS_PATH: &str = "assets";
 const SPRITES_PATH: &str = "sprites";
-const SPRITES: &'static [&str] = &[
+const SPRITES: &[&str] = &[
     crate::constants::YAAL_SPRITE,
     crate::constants::BACKGROUND_SPRITE,
 ];

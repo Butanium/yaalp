@@ -29,7 +29,7 @@ impl Entity {
             position: Vec2::new(0., 0.),
             size: Vec2::new(body.size()[0] as f32, body.size()[1] as f32),
             scaled_body: body.copy(),
-            body: body,
+            body,
             direction: Vec2::new(1., 0.),
             speed: 0.,
         }
@@ -235,7 +235,7 @@ impl World {
     ///
     /// * `object` - The entity to add to the world.
     pub fn add_entity(&mut self, object: Box<dyn WorldObject<World>>) {
-        self.objects.borrow_mut().push(object.into());
+        self.objects.borrow_mut().push(object);
     }
 
     /// Returns the number of world objects in the world.
@@ -312,7 +312,7 @@ impl World {
         // Update worldObjects
         let mut objects = self.objects.borrow_mut();
         for object in objects.iter_mut() {
-            object.update(&self, state);
+            object.update(self, state);
         }
 
         // Decay
