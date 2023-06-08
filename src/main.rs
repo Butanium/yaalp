@@ -1,7 +1,8 @@
+use graphics::sprite_textures;
 use graphics::Drawable;
 use notan::draw::*;
 use notan::prelude::*;
-use world::WorldObject;
+use world::State;
 mod constants;
 mod creature;
 mod graphics;
@@ -9,22 +10,22 @@ mod utils;
 mod world;
 use crate::creature::RandomInit;
 use crate::world::World;
-use tch::IndexOp;
 
-const WIDTH: i32 = 500;
-const HEIGHT: i32 = 500;
+const WIDTH: u32 = 700;
+const HEIGHT: u32 = 700;
 
 #[derive(AppState)]
-struct State<'a> {
+struct GameState {
     world: World,
+    world_state: State,
     frame: usize,
-    texture_manager: graphics::TextureManager<'a>,
 }
 
 #[notan_main]
 fn main() -> Result<(), String> {
     // let win_config = WindowConfig::new().size(WIDTH, HEIGHT).vsync(true);
-    let win_config = WindowConfig::new().set_vsync(true);
+    let win_config = WindowConfig::new().set_size(WIDTH, HEIGHT).set_vsync(true);
+    let _guard = tch::no_grad_guard(); // disable gradient calculation
 
     notan::init_with(init)
         .add_config(win_config)
@@ -41,54 +42,54 @@ fn smoke_test() {
 }
 const DELTA_TIME: f32 = 1. / 60.;
 fn create_world() -> World {
-    let _guard = tch::no_grad_guard(); // disable gradient calculation
-
     let device = if tch::Cuda::is_available() {
         tch::Device::Cuda(0)
     } else {
         tch::Device::Cpu
     };
     println!("Device used: {:?}", device);
-    let seed = rand::random();
+
     // RGB World
     World::new(
         WIDTH as i64,
         HEIGHT as i64,
         3,
-        10,
+        constants::MAX_FOV,
         &[0., 0., 0.],
         &[255., 255., 255.],
         device,
         tch::Kind::Float,
-        seed,
         DELTA_TIME,
     )
 }
 
-fn init<'a>(gfx: &mut Graphics) -> State<'a> {
-    State {
+fn init(gfx: &mut Graphics) -> GameState {
+    let seed = rand::random();
+    tch::manual_seed(seed as i64);
+    GameState {
         world: create_world(),
         frame: 0,
-        texture_manager: graphics::TextureManager::new(gfx),
+        world_state: State::new(seed, sprite_textures(gfx)),
     }
 }
 
-fn update(app: &mut App, state: &mut State) {
+fn update(state: &mut GameState) {
     let _guard = tch::no_grad_guard(); // disable gradient calculation
-    state.world.update();
+    state.world.update(&mut state.world_state);
     state.frame += 1;
     if state.frame % 120 == 0 {
-        let mut yaal = creature::Yaal::new_random(state);
-        yaal.set_position(
-            state.world.random.gen_range(50. ..250.),
-            state.world.random.gen_range(50. ..250.),
+        let yaal = creature::Yaal::new_random(&state.world, &mut state.world_state);
+        yaal.spawn(
+            state.world_state.random.gen_range(0. ..WIDTH as f32),
+            state.world_state.random.gen_range(50. ..HEIGHT as f32),
+            &mut state.world,
         );
-        state.world.add_entity(Box::new(yaal));
     }
 }
 
-fn draw(gfx: &mut Graphics, state: &mut State) {
+fn draw(gfx: &mut Graphics, state: &mut GameState) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
-    state.world.draw(&mut draw);
+    state.world.draw(&mut draw, &state.world_state);
+    gfx.render(&draw);
 }

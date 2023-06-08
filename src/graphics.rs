@@ -1,11 +1,14 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 
 use notan::draw::{Draw, DrawImages};
 use notan::prelude::{Graphics, Texture};
 
+use crate::world::State;
+
 pub trait Drawable {
-    fn draw(&self, draw: &mut Draw);
+    fn draw(&self, draw: &mut Draw, state: &State);
 }
 
 pub trait TextureSprite: Drawable {
@@ -19,33 +22,27 @@ pub trait TextureSprite: Drawable {
     }
 }
 
-fn image_texture(image: &str, gfx: &Graphics) -> Texture {
-    let path = std::path::Path::new("assets").join("sprites").join(image);
+const ASSETS_PATH: &str = "assets";
+const SPRITES_PATH: &str = "sprites";
+const SPRITES: &'static [&str] = &[&"hex.png"];
+
+pub fn sprite_path(sprite: &str) -> std::path::PathBuf {
+    std::path::Path::new("src")
+        .join(ASSETS_PATH)
+        .join(SPRITES_PATH)
+        .join(sprite)
+}
+pub fn sprite_textures(gfx: &mut Graphics) -> HashMap<String, Texture> {
+    SPRITES
+        .iter()
+        .map(|sprite| (sprite.to_string(), image_texture(sprite_path(sprite), gfx)))
+        .collect()
+}
+
+pub fn image_texture(path: std::path::PathBuf, gfx: &mut Graphics) -> Texture {
     let mut buffer = Vec::new();
+    println!("Loading image: {:?}", path);
     let mut file = File::open(path).unwrap();
     file.read_to_end(&mut buffer).unwrap();
     gfx.create_texture().from_image(&buffer).build().unwrap()
-}
-
-/// Contains a map<filename, Texture> and a gfx to create textures
-pub struct TextureManager<'a> {
-    textures: std::collections::HashMap<String, Texture>,
-    gfx: &'a mut Graphics,
-}
-
-impl<'a> TextureManager<'a> {
-    pub fn new(gfx: &mut Graphics) -> Self {
-        Self {
-            textures: std::collections::HashMap::new(),
-            gfx,
-        }
-    }
-
-    pub fn get(&mut self, image: &str) -> &Texture {
-        if !self.textures.contains_key(image) {
-            self.textures
-                .insert(image.to_string(), image_texture(image, &self.gfx));
-        }
-        self.textures.get(image).unwrap()
-    }
 }

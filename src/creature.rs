@@ -1,18 +1,15 @@
-use std::path;
-
-use crate::State;
 use crate::constants;
+use crate::constants::MIN_SIZE;
+use crate::graphics::sprite_path;
 use crate::graphics::Drawable;
 use crate::utils;
 use crate::world;
 use crate::world::Entity;
+use crate::world::State;
 use delegate::delegate;
-use notan::draw::CreateDraw;
 use notan::draw::Draw;
 use notan::draw::DrawImages;
 use notan::math::Vec2;
-use notan::prelude::Graphics;
-use notan::prelude::Texture;
 use rand::rngs::StdRng;
 use rand::Rng;
 use strum_macros::{EnumCount, FromRepr};
@@ -26,7 +23,7 @@ const YAAL_SPRITE: &str = "hex.png";
 
 /// Trait that allows to create a new object with random values
 pub trait RandomInit {
-    fn new_random(state : &mut State) -> Self;
+    fn new_random(world: &World, state: &mut State) -> Self;
 }
 
 trait MovingObject {
@@ -34,7 +31,7 @@ trait MovingObject {
     fn set_position(&mut self, x: f32, y: f32);
     fn direction(&self) -> Vec2;
     fn speed(&self) -> f32;
-    fn updatePos(&mut self, delta: f32) {
+    fn update_pos(&mut self, delta: f32) {
         let new_pos = self.position() + self.direction() * self.speed() * delta;
         self.set_position(new_pos.x, new_pos.y);
     }
@@ -301,7 +298,8 @@ struct YaalGenome {
     brain: YaalVectorBrain,
     max_speed: f32,
     field_of_view: i64,
-    max_size: i64,
+    max_size: f32,
+    init_size: f32,
 }
 
 #[derive(Debug)]
@@ -316,11 +314,11 @@ struct YaalState {
 
 #[derive(Debug)]
 /// A little creature
-pub struct Yaal<'a> {
+pub struct Yaal {
     internal_state: YaalState,
     entity: world::Entity,
     genome: YaalGenome,
-    sprite: &'a Texture,
+    sprite: String,
 }
 
 // #### Random init ####
@@ -328,24 +326,23 @@ impl<T> RandomInit for T
 where
     T: EnumFromRepr + strum::EnumCount,
 {
-    fn new_random(state: &mut State) -> Self {
-        let repr = state.world.random.gen_range(0..T::COUNT);
+    fn new_random(_world: &World, state: &mut State) -> Self {
+        let repr = state.random.gen_range(0..T::COUNT);
         T::from_repr(repr).unwrap()
     }
 }
 
 impl RandomInit for DistancePenalty {
-    fn new_random(state: &mut State) -> Self {
+    fn new_random(world: &World, state: &mut State) -> Self {
         DistancePenalty {
-            weight: state.world.random.gen_range(0. ..1.),
-            ptype: PenaltyType::new_random(state),
+            weight: state.random.gen_range(0. ..1.),
+            ptype: PenaltyType::new_random(world, state),
         }
     }
 }
 
 impl RandomInit for YaalVectorBrain {
-    fn new_random(state: &mut State) -> Self {
-        let mut world = state.world;
+    fn new_random(world: &World, state: &mut State) -> Self {
         let device = world.device;
         let direction_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
         let speed_weights = Tensor::randn(&[world.channels], (Kind::Float, device));
@@ -353,11 +350,11 @@ impl RandomInit for YaalVectorBrain {
             &[world.channels, YaalAction::NB_ACTIONS],
             (Kind::Float, device),
         );
-        let decision_sampling = DecisionSampling::new_random(state);
-        let direction_distance_penalty = DistancePenalty::new_random(state);
-        let speed_distance_penalty = DistancePenalty::new_random(state);
-        let decision_distance_penalty = DistancePenalty::new_random(state);
-        let rand_direction_norm = world.random.gen_range(0. ..1.);
+        let decision_sampling = DecisionSampling::new_random(world, state);
+        let direction_distance_penalty = DistancePenalty::new_random(world, state);
+        let speed_distance_penalty = DistancePenalty::new_random(world, state);
+        let decision_distance_penalty = DistancePenalty::new_random(world, state);
+        let rand_direction_norm = state.random.gen_range(0. ..1.);
         YaalVectorBrain {
             device,
             direction_weights,
@@ -373,16 +370,17 @@ impl RandomInit for YaalVectorBrain {
 }
 
 impl RandomInit for YaalGenome {
-    fn new_random(state: &mut State) -> YaalGenome {
-        let mut world = state.world;
-        let max_speed = world.random.gen_range(0. ..1.);
-        let field_of_view = world.random.gen_range(0..=constants::MAX_FOV);
-        let max_size = world.random.gen_range(1..=constants::MAX_SIZE);
-        let brain = YaalVectorBrain::new_random(state);
+    fn new_random(world: &World, state: &mut State) -> YaalGenome {
+        let max_speed = state.random.gen_range(0. ..constants::MAX_SPEED);
+        let field_of_view = state.random.gen_range(0..=constants::MAX_FOV);
+        let max_size = state.random.gen_range(MIN_SIZE..=constants::MAX_SIZE);
+        let init_size = state.random.gen_range(MIN_SIZE..=max_size);
+        let brain = YaalVectorBrain::new_random(world, state);
         YaalGenome {
             brain,
             max_speed,
             field_of_view,
+            init_size,
             max_size,
         }
     }
@@ -390,7 +388,7 @@ impl RandomInit for YaalGenome {
 
 impl YaalState {
     /// TODO: Take into account the genome
-    fn new(genome: &YaalGenome) -> YaalState {
+    fn new(_genome: &YaalGenome) -> YaalState {
         YaalState {
             health: 1.,
             max_health: 1.,
@@ -401,23 +399,33 @@ impl YaalState {
     }
 }
 
-impl<'a> RandomInit for Yaal<'a> {
-    fn new_random(state: &mut State) -> Yaal<'a> {
-        let genome = YaalGenome::new_random(state);
+impl RandomInit for Yaal {
+    fn new_random(world: &World, state: &mut State) -> Yaal {
+        let genome = YaalGenome::new_random(world, state);
         let yaal_state = YaalState::new(&genome);
-        let body =
-            tch::vision::image::load(path::Path::new("assets").join("sprites").join(YAAL_SPRITE))
-                .unwrap();
+        let body = tch::vision::image::load(sprite_path(YAAL_SPRITE))
+            .unwrap()
+            .to(world.device);
+        let mut entity = Entity::new(body);
+        entity.set_size(genome.init_size, genome.init_size);
         Yaal {
             internal_state: yaal_state,
-            entity: Entity::new(body),
+            entity,
             genome,
-            sprite: state.texture_manager.get(YAAL_SPRITE),
+            sprite: YAAL_SPRITE.to_string(),
         }
     }
 }
 
-impl<'a> MovingObject for Yaal<'a> {
+impl Yaal {
+    pub fn spawn(mut self, x: f32, y: f32, world: &mut World) {
+        Entity::set_position(&mut self.entity, x, y);
+        world.bound_position(&mut self.entity);
+        world.add_entity(Box::new(self));
+    }
+}
+
+impl MovingObject for Yaal {
     delegate! {
         to self.entity {
             fn position(&self) -> Vec2;
@@ -431,7 +439,7 @@ impl<'a> MovingObject for Yaal<'a> {
 }
 
 // Allows Yaal to be used as a WorldObject (therefore to be added and interact with the world)
-impl<'a> WorldObject<World> for Yaal<'a> {
+impl WorldObject<World> for Yaal {
     delegate! {
         to self.entity {
             fn position(&self) -> Vec2;
@@ -440,30 +448,25 @@ impl<'a> WorldObject<World> for Yaal<'a> {
             fn size(&self) -> Vec2;
         }
     }
-    fn update(&mut self, world: &mut World) {
+    fn update(&mut self, world: &World, state: &mut State) {
         let sensory_input = world.get_observation(
             (self.entity.position() + (self.entity.size() / 2.)).round(),
             self.genome.field_of_view,
             self.entity.size(),
         );
-        println!(
-            "Yaal input: {:#?}\nshape: {:#?}",
-            sensory_input,
-            sensory_input.size()
-        );
-        let output = self.genome.brain.evaluate(sensory_input, &mut world.random);
+        let output = self.genome.brain.evaluate(sensory_input, &mut state.random);
         output.apply(self);
-        self.updatePos(world.delta_time);
-        world.bound_position(&self.entity);
+        self.update_pos(world.delta_time);
+        world.bound_position(&mut self.entity);
         // TODO use output to update the Yaal
         println!("Yaal action: {:#?}", output);
     }
 }
 
-impl<'a> Drawable for Yaal<'a> {
-    fn draw(&self, draw: &mut Draw) {
+impl Drawable for Yaal {
+    fn draw(&self, draw: &mut Draw, state: &State) {
         let size = self.size();
-        draw.image(&self.sprite)
+        draw.image(state.get_texture(&self.sprite))
             .position(self.entity.position().x, self.entity.position().y)
             .size(size.x, size.y);
     }
