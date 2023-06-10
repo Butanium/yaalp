@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
-
+use crate::constants::graphics_c::SPRITES;
 use notan::draw::{Draw, DrawImages};
 use notan::prelude::{Graphics, Texture};
 
@@ -9,10 +9,7 @@ use crate::world::State;
 
 const ASSETS_PATH: &str = "assets";
 const SPRITES_PATH: &str = "sprites";
-const SPRITES: &[&str] = &[
-    crate::constants::YAAL_SPRITE,
-    crate::constants::BACKGROUND_SPRITE,
-];
+
 
 pub trait Drawable {
     fn draw(&self, draw: &mut Draw, state: &State);

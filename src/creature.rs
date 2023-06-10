@@ -1,4 +1,4 @@
-use crate::constants::*;
+use crate::constants::{graphics_c::YAAL_SPRITE, yaal_c::*};
 use crate::graphics::sprite_path;
 use crate::graphics::Drawable;
 use crate::utils;
@@ -420,9 +420,15 @@ impl RandomInit for Yaal {
     fn new_random(world: &World, state: &mut State) -> Yaal {
         let genome = YaalGenome::new_random(world, state);
         let yaal_state = YaalState::new(&genome);
-        let body = tch::vision::image::load(sprite_path(YAAL_SPRITE))
+        let rgb = tch::vision::image::load(sprite_path(YAAL_SPRITE))
             .unwrap()
             .to(world.device);
+        let blank = Tensor::zeros(
+            &[world.channels - 3, rgb.size()[1], rgb.size()[2]],
+            (Kind::Float, world.device),
+        );
+        let body = Tensor::cat(&[rgb, blank], 0);
+        let _ = body.i(BODY_CHANNEL).fill_(1.);
         let mut entity = Entity::new(body);
         entity.set_size(genome.init_size, genome.init_size);
         Yaal {

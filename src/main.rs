@@ -10,6 +10,7 @@ mod utils;
 mod world;
 use crate::creature::RandomInit;
 use crate::world::World;
+use constants::{graphics_c::*, world_c::*, yaal_c::MAX_FOV};
 
 const WIDTH: u32 = 700;
 const HEIGHT: u32 = 700;
@@ -44,15 +45,13 @@ fn create_world() -> World {
         tch::Device::Cpu
     };
     println!("Device used: {:?}", device);
-
-    // RGB World
     World::new(
         WIDTH as i64,
         HEIGHT as i64,
-        3,
-        constants::MAX_FOV,
-        &[0., 0., 0.],
-        &[255., 255., 255.],
+        NUM_CHANNELS,
+        MAX_FOV,
+        DECAYS,
+        MAX_VALUES,
         device,
         tch::Kind::Float,
         DELTA_TIME,
@@ -86,7 +85,7 @@ fn update(app: &mut App, state: &mut GameState) {
 fn draw(app: &mut App, gfx: &mut Graphics, state: &mut GameState) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
-    draw.image(state.world_state.get_texture(constants::BACKGROUND_SPRITE))
+    draw.image(state.world_state.get_texture(BACKGROUND_SPRITE))
         .size(WIDTH as f32, HEIGHT as f32);
     state.world.draw(&mut draw, &state.world_state);
     draw.text(
