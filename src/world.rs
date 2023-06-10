@@ -11,7 +11,8 @@ use tch::Tensor;
 #[derive(Debug)]
 /// Represents an entity in the world.
 ///
-/// An entity has a position (x, y) and a body, which is a tensor representing its shape.
+/// An entity has a position (x, y), a size, a speed, a direction
+/// and a body, which is a tensor representing its shape.
 pub struct Entity {
     position: Vec2,
     size: Vec2,
@@ -190,8 +191,8 @@ impl World {
         height: i64,
         channels: i64,
         max_field_of_view: i64,
-        decays: &[f64],
-        max_values: &[f64],
+        decays: &[f32],
+        max_values: &[f32],
         device: tch::Device,
         val_type: tch::Kind,
         delta_time: f32,
