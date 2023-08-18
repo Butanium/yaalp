@@ -29,6 +29,9 @@ struct FoodState {
     dead: bool,
     health: f32,
     max_health: f32,
+    // TODO : this should be in the world.
+    friction: f32,
+    damage: f32,    // If the food is a cactus for example it should damage the Yaals.
     }
 
 pub struct Food {
@@ -77,7 +80,9 @@ impl WorldObject<World> for Food {
     pub fn update(&mut self, world: &World, delta_time: f32) {
         // This function is called at each frame.
         // updates the position and then reduce the speed by the friction coefficient.
-        // realease pheromones in the environment (by adding values to the pheromone channels of the world)
+
+        self.entity.position += this.entity.speed * delta_time * this.entity.direction ;
+        self.entity.speed -= this.friction * delta_time;
     }
 }
 
@@ -93,12 +98,23 @@ impl Food {
         // TODO : Implement the function.
     }
 
-    pub fn eaten(&mut self,, yaal: &mut Yaal, damage: f32) {
+    pub fn eaten(&mut self,, yaal: &mut Yaal, damage: f32) -> f32 {
         // take damage and eventually die. Also call hurt() on the Yaal.
+
+        quantity = min(damage, self.health);
+        self.health -= damage;
+        if self.health <= 0. {
+            self.dead = true;
+        }
+
+        self.hurt(yaal, self.damage);
+
+        return quantity;
     }
 
     pub fn hurt(&mut self, yaal: &mut Yaal, damage: f32) {
         // inflict damage to the Yaal.
+        yaal.take_damage(damage);
     }
 }
 

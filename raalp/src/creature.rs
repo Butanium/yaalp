@@ -446,6 +446,10 @@ impl Yaal {
         world.bound_position(&mut self.entity);
         world.add_entity(Box::new(self));
     }
+
+    pub fn take_damage(&mut self, damage: f64) {
+        self.internal_state.health -= damage;
+    }
 }
 
 impl MovingObject for Yaal {
