@@ -7,13 +7,49 @@ A quadtree is a spatial tree with the following properties:
 """
 import numpy as np
 
-from constants import QUADTREE_MAX_CAPACITY
+from constants import QUADTREE_MAX_CAPACITY, OBJECT_RADIUS
 
 def distance(p1, p2):
     """
     Return the distance between two points.
     """
     return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+
+def sqr_distance(p1, p2):
+    """
+    Return the distance between two points without taking the square root.
+    """
+    return (p1[0] - p2[0])**2 + (p1[1] - p2[1])**2
+
+def distance_point_to_sqr(sqr, point, distance_fn=distance):
+    """
+    Return the distance between a point and a square.
+    """
+    x = sqr.top_left[0]
+    y = sqr.top_left[1]
+    px = point[0]
+    py = point[1]
+    if px < x:
+        if py < y:
+            return distance_fn((px, py), (x, y))
+        elif py > y + sqr.height:
+            return distance_fn((px, py), (x, y + sqr.height))
+        else:
+            return (x - px)**2 if distance_fn == sqr_distance else x - px
+    elif px > x + sqr.width:
+        if py < y:
+            return distance_fn((px, py), (x + sqr.width, y))
+        elif py > y + sqr.height:
+            return distance_fn((px, py), (x + sqr.width, y + sqr.height))
+        else:
+            return (px - x) ** 2 if distance_fn == sqr_distance else px - x
+    else:
+        if py < y:
+            return (y - py) ** 2 if distance_fn == sqr_distance else y - py
+        elif py > y + sqr.height:
+            return (py - y + sqr.height) ** 2 if distance_fn == sqr_distance else py - y + sqr.height
+        else:
+            return 0
 
 class QuadTree:
     def __init__(self, top_left, height, width, capacity=QUADTREE_MAX_CAPACITY):
@@ -26,11 +62,22 @@ class QuadTree:
 
         self.capacity = capacity
         self.points = []
+        self.representative = None
+        self.empty = True
 
         self.NE = None
         self.NW = None
         self.SE = None
         self.SW = None
+
+    def depth(self):
+        """
+        Return the depth of this quadtree.
+        """
+        if not self.divided:
+            return 1
+        else:
+            return 1 + max(self.NE.depth(), self.NW.depth(), self.SE.depth(), self.SW.depth())
     
     def total_points(self):
         """
@@ -41,6 +88,16 @@ class QuadTree:
         else:
             return (self.NE.total_points() + self.NW.total_points() +
                     self.SE.total_points() + self.SW.total_points())
+        
+    def total_leafs(self):
+        """
+        Return the total number of leafs in this quadtree.
+        """
+        if not self.divided:
+            return 1
+        else:
+            return (self.NE.total_leafs() + self.NW.total_leafs() +
+                    self.SE.total_leafs() + self.SW.total_leafs())
     
     def contains(self, point):
         """
@@ -74,16 +131,6 @@ class QuadTree:
             self.SW.insert(point)
 
         self.divided = True
-        
-    def total_leafs(self):
-        """
-        Return the total number of leafs in this quadtree.
-        """
-        if not self.divided:
-            return 1
-        else:
-            return (self.NE.total_leafs() + self.NW.total_leafs() +
-                    self.SE.total_leafs() + self.SW.total_leafs())
     
     def merge(self):
         """
@@ -119,6 +166,7 @@ class QuadTree:
         if not self.contains(point):
             return
         
+        self.representative = point
         if self.divided:
             self.NE.insert(point)
             self.NW.insert(point)
@@ -128,27 +176,89 @@ class QuadTree:
             self.points.append(point)
             if len(self.points) > self.capacity:
                 self.subdivide()
+        
+        self.empty = False
 
+    # TODO : This method doesn't work !!!
+    # We often want to supress points that moved outside of their previous square.
     def supress(self, point):
         if not self.contains(point):
             return
         
+        if point == self.representative :
+            self.representative = None
+
         if self.divided:
             self.NE.supress(point)
             self.NW.supress(point)
             self.SE.supress(point)
             self.SW.supress(point)
 
+            self.representative = self.NE.representative or self.NW.representative or self.SE.representative or self.SW.representative
+
             self.merge()
+            if self.total_points() == 0:
+                self.empty = True
         else:
             self.points.remove(point)
+            if len(self.points) > 0:
+                self.representative = self.points[0]
+            else:
+                self.empty = True
+    
+    def naive_closest(self, point, radius=OBJECT_RADIUS+1):
+        """
+        This has a worst case complexity of O(n*log(n)) for one query. It is worse thant the naive method of going through the list of all points.
+        However, the worst case complexity assumes that all points are within the same radius, so all points are mutually in collision.
+        Thus, in a setting with collisions, it is extremely unlikely that more than 6 points are close enough, and in practice, this
+        method is faster than the mathematically optimal method below.
+        """
+        candidates = self.query_circle((point.x, point.y), radius)
+        return min(candidates, key=lambda p: sqr_distance((p.x, p.y), (point.x, point.y)))
 
     def closest(self, x, y):
         """
         Return the closest point to the given point.
-        TODO
+        Algorithm :
+            Maintain a list of interesting squares
+            sqrs_0 is the root of the quadtree
+            sqrs_{i+1} are the squares whose distance to the point is less than the current minimum distance among the children of sqrs_i.
+            The current minimum distance is the distance between the point and the best representative yet.
+            Returning the best representative gives the closest point.
         """
-        pass
+        if not self.divided:
+            # This case is juste for trees reduced to a single leaf. Plunging into the tree will exclude empty squares.
+            if len(self.points) == 0:
+                return None
+            return min(self.points, key=lambda p: sqr_distance((p.x, p.y), (x, y)))
+        
+        sqrs = [self]
+        
+        while sqrs != []:
+            # /!\ only put non empty squares in sqrs
+            # change here to include capacity > 1 trees
+            best = min([sqr.representative for sqr in sqrs],
+                           key=lambda p: sqr_distance((p.x, p.y), (x, y))
+                          )
+            
+            new_sqrs = []
+            for sqr in sqrs:
+                if not sqr.divided :
+                    # In this case, the closest point in sqr is already accounted for in best_rep and we can skip to the next square.
+                    continue
+                
+                for sub_sqr in [sqr.NE, sqr.NW, sqr.SE, sqr.SW]:
+                    if (not sub_sqr.empty) \
+                        and (distance_point_to_sqr(sub_sqr, (x, y), distance_fn=sqr_distance) < sqr_distance((best.x, best.y), (x, y))):
+                        new_sqrs.append(sub_sqr)
+
+                        if not sub_sqr.divided:
+                            # the representative is changed to the closest :
+                            sub_sqr.representative = min(sub_sqr.points, key=lambda p: sqr_distance((p.x, p.y), (x, y)))
+            
+            sqrs = new_sqrs
+
+        return best
 
     def query_rect(self, top_left, height, width):
         """
@@ -206,3 +316,7 @@ class QuadTree:
         x = self.top_left[0]
         y = self.top_left[1]
         return not (x > center[0] + radius or x + self.width < center[0] - radius or y > center[1] + radius or y + self.height < center[1] - radius)
+
+        # this is much slower in practice than the above method
+        dist = distance_point_to_sqr(self, center)
+        return dist <= radius**2

@@ -1,7 +1,7 @@
 import torch
 DEVICE = 'cpu'#'cuda' if torch.cuda.is_available() else 'cpu'
 
-HEIGTH = 500
+HEIGTH = 1280
 WIDTH = 1280
 
 OBJECT_RADIUS = 10

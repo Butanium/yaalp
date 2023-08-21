@@ -14,6 +14,8 @@
 
 - Food release upon death (predators, scavengers) (tune the amount of food based on the cost of fighting, living, reproducing, ..., and to mimic the flow of energy in real life (sun -> loss -> plant -> loss -> feminist -> loss -> predators))
 
+- For varying size of yaacs and potentially food, make quadtree that contains rectangle, and adapt the collision to take into account that we don't want collisions between the actual rectangles but between the underlying circles.
+
 ## Todo
 
 - Add bias for actions
