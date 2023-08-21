@@ -1,6 +1,13 @@
 import torch
 DEVICE = 'cpu'#'cuda' if torch.cuda.is_available() else 'cpu'
 
+HEIGTH = 500
+WIDTH = 1280
+
+OBJECT_RADIUS = 10
+
+QUADTREE_MAX_CAPACITY = 4
+
 """
 Possible brain possible :
 
@@ -10,11 +17,6 @@ YaacBrainCNN
 """
 
 DEFAULT_BRAIN = 'YaacBrainMLP'
-
-HEIGTH = 500
-WIDTH = 1280
-
-OBJECT_RADIUS = 10
 
 MAX_FOV = 101
 
