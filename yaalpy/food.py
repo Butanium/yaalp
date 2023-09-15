@@ -11,7 +11,7 @@ The quadtree of moving objects is reconstructed at each frame, while the quadtre
 only updated when a food is eaten or a new food is created.
 """
 
-from constants import WIDTH, HEIGTH, DEFAULT_WORLD_IMPRINT_FOOD, RGB_CHANNELS, IR_UV_CHANNELS, PHEROMONE_CHANNELS
+from constants import WIDTH, HEIGTH, DEFAULT_WORLD_IMPRINT_FOOD, RGB_CHANNELS, IR_UV_CHANNELS, PHEROMONE_CHANNELS, DEVICE
 
 class Food:
     def __init__(self,  world, x, y,energy=10):
@@ -25,6 +25,8 @@ class Food:
     
     def first_imprint(self, negative=False):
         top, bottom, left, right = self.get_bounding()
+        print(self.world.world_tensor[PHEROMONE_CHANNELS, top:bottom, left:right].shape)
+        print(self.world_imprint[PHEROMONE_CHANNELS].shape)
         self.world.world_tensor[:, top:bottom, left:right] += self.world_imprint * (-1 if negative else 1)
 
     def get_bounding(self):

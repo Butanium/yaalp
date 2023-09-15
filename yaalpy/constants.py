@@ -93,4 +93,4 @@ DEFAULT_WORLD_IMPRINT_FOOD = torch.tensor([
         [0.1, 0.2, 1, 0.2, 0.1],
         [0, 0.1, 0.2, 0.1, 0]
     ],
-])
+]).to(DEVICE)

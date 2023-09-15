@@ -8,9 +8,8 @@ class World:
         self.height = HEIGTH
         self.width = WIDTH
 
-        self.world_tensor = torch.zeros((self.nb_world_channels, self.height, self.width)).to(DEVICE)
+        self.world_tensor = torch.zeros((self.nb_world_channels, self.height, self.width), device=DEVICE)
         self.padding = 0
-        self.padded_world_tensor = torch.nn.functional.pad(self.world_tensor, (MAX_FOV, MAX_FOV, MAX_FOV, MAX_FOV), mode='constant', value=self.padding)
 
         self.nb_possible_actions = 3
         
@@ -43,11 +42,23 @@ class World:
 
     def get_fov(self, x, y, fov):
         left = int(x-fov//2) + MAX_FOV
+        clamped_left = max(left, 0)
         right = left + fov
+        clamped_right = min(right, self.width)
         top = int(y-fov//2) + MAX_FOV
+        clamped_top = max(top, 0)
         bottom = top + fov
+        clamped_bottom = min(bottom, self.height)
         #TODO : check that x and y axis are correct everywhere
-        return self.padded_world_tensor[:, top:bottom, left:right]
+        view = torch.zeros((self.nb_world_channels, fov, fov), device=DEVICE)
+        print(x, y)
+        print(top, bottom, left, right)
+        print(clamped_top, clamped_bottom, clamped_left, clamped_right)
+        print(self.world_tensor[:, clamped_top:clamped_bottom, clamped_left:clamped_right].shape)
+        print(view[:, clamped_top-top:clamped_bottom-top, clamped_left-left:clamped_right-left].shape)
+        view[:, clamped_top-top:clamped_bottom-top, clamped_left-left:clamped_right-left] = self.world_tensor[:, clamped_top:clamped_bottom, clamped_left:clamped_right]
+
+        return view
 
     def pheromone_evaporation(self):
         self.world_tensor[PHEROMONE_CHANNELS] *= PHEROMONE_EVAPORATION_FACTOR

@@ -1,6 +1,8 @@
 .*/*
-
+__pycache*
 
 # Added by cargo
 
 /target
+yaalpy/tests.py
+.gitignore

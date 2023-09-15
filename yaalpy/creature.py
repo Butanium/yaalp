@@ -1,11 +1,10 @@
 import numpy as np
 import torch
 from torch import nn
+import time
 
-from constants import DEFAULT_BRAIN, DEVICE, HEIGTH, WIDTH, OBJECT_RADIUS, PHEROMONE_CHANNELS, RGB_CHANNELS, IR_UV_CHANNELS
+from constants import DEFAULT_BRAIN, DEVICE, HEIGTH, WIDTH, OBJECT_RADIUS, PHEROMONE_CHANNELS, RGB_CHANNELS, IR_UV_CHANNELS, MAX_FOV
 from world import World
-from graphics import Circle
-import pygame as pg
 
 class MovingObject:
     def __init__(self, x=WIDTH//2, y=HEIGTH//2, speed=0, direction=0):
@@ -35,21 +34,13 @@ class MovingObject:
 class YaacStats:
     def __init__(self,
             health=100,
-            max_health=100,
             energy=100,
-            max_energy=100,
             hunger=0,
-            max_hunger=100,
-            max_speed=100,
             age=0
         ):
         self.health = health
-        self.max_health = max_health
         self.energy = energy
-        self.max_energy = max_energy
         self.hunger = hunger
-        self.max_hunger = max_hunger
-        self.max_speed = max_speed
         self.age = age
 
 
@@ -168,10 +159,10 @@ BRAIN_DICT = {
 
 def get_random_color():
     # color : RGB + IR + UV
-    return torch.randn(5).to(DEVICE)
+    return torch.randn(5, device=DEVICE)
 
 def get_circle(color):
-    circle = torch.zeros((len(RGB_CHANNELS + IR_UV_CHANNELS), 2*OBJECT_RADIUS, 2*OBJECT_RADIUS)).to(DEVICE)
+    circle = torch.zeros((len(RGB_CHANNELS + IR_UV_CHANNELS), 2*OBJECT_RADIUS, 2*OBJECT_RADIUS), device=DEVICE)
     for i in range(2*OBJECT_RADIUS):
         for j in range(2*OBJECT_RADIUS):
             if (i-OBJECT_RADIUS)**2 + (j-OBJECT_RADIUS)**2 <= OBJECT_RADIUS**2:
@@ -180,7 +171,7 @@ def get_circle(color):
     return circle
 
 def get_random_pheromones():
-    return torch.randn(len(PHEROMONE_CHANNELS), 2*OBJECT_RADIUS, 2*OBJECT_RADIUS).to(DEVICE)
+    return torch.randn(len(PHEROMONE_CHANNELS), 2*OBJECT_RADIUS, 2*OBJECT_RADIUS, device=DEVICE)
 
 class YaacGenome:
     # The genome may include other parameters in the future, like brain architecture.
@@ -192,6 +183,7 @@ class YaacGenome:
             fov=31,
             max_health=100,
             max_energy=100,
+            max_hunger=100,
             max_speed=2.,
             nb_internal_states=8,
             color=None
@@ -199,13 +191,62 @@ class YaacGenome:
         self.fov = fov
         self.max_health = max_health
         self.max_energy = max_energy
+        self.max_hunger = max_hunger
         self.max_speed = max_speed
 
         self.pheromones = get_random_pheromones()
         self.color = color if color is not None else get_random_color()
         self.physical_representation = get_circle(self.color)
 
+        self.world_imprint = torch.cat((self.physical_representation, self.pheromones), dim=0)
+
         self.brain = BRAIN_DICT[DEFAULT_BRAIN](world, nb_internal_states).to(DEVICE)
+    
+    def cross_over(self, other):
+        self.fov = self.fov if np.random.rand() < 0.5 else other.fov
+        self.max_health = self.max_health if np.random.rand() < 0.5 else other.max_health
+        self.max_energy = self.max_energy if np.random.rand() < 0.5 else other.max_energy
+        self.max_hunger = self.max_hunger if np.random.rand() < 0.5 else other.max_hunger
+        self.max_speed = self.max_speed if np.random.rand() < 0.5 else other.max_speed
+
+        pheromones_mask = torch.rand(self.pheromones.shape, device=DEVICE) < 0.5
+        self.pheromones[pheromones_mask] = other.pheromones[pheromones_mask]
+
+        color_mask = torch.rand(self.color.shape, device=DEVICE) < 0.5
+        self.color[color_mask] = other.color[color_mask]
+        self.physical_representation = get_circle(self.color)
+
+        self.world_imprint = torch.cat((self.physical_representation, self.pheromones), dim=0)
+
+        for param, other_param in zip(self.brain.parameters(), other.brain.parameters()):
+            mask = torch.rand(param.shape, device=DEVICE) < 0.5
+            param[mask] = other_param[mask]
+        
+    def mutate(self, mutation_rate=0.1):
+        self.fov = self.fov + np.random.randint(-2, 3)
+        self.fov = min(max(1, self.fov), MAX_FOV)
+
+        self.max_health = self.max_health + np.random.randint(-100*mutation_rate, 101*mutation_rate)
+        self.max_health = max(1, self.max_health)
+
+        self.max_energy = self.max_energy + np.random.randint(-100*mutation_rate, 101*mutation_rate)
+        self.max_energy = max(1, self.max_energy)
+
+        self.max_hunger = self.max_hunger + np.random.randint(-100*mutation_rate, 101*mutation_rate)
+        self.max_hunger = max(1, self.max_hunger)
+
+        self.max_speed = self.max_speed + (np.random.random() - 0.5) * mutation_rate
+        self.max_speed = max(0.1, self.max_speed)
+
+        self.pheromones += torch.randn(self.pheromones.shape, device=DEVICE) * mutation_rate
+
+        self.color += torch.randn(self.color.shape, device=DEVICE) * mutation_rate
+        
+        self.physical_representation = get_circle(self.color)
+        self.world_imprint = torch.cat((self.physical_representation, self.pheromones), dim=0)
+
+        for param in self.brain.parameters():
+            param += torch.randn(param.shape, device=DEVICE) * mutation_rate
 
 # Yet Another Artificial Creature.
 # The Yaac is the base class for all creatures in the game.
@@ -218,27 +259,44 @@ class Yaac(MovingObject):
             direction=0
         ):
         super().__init__(x, y, speed, direction)
+        self.dead = False
         self.world = world
 
         self.stats = YaacStats()
         self.nb_internal_states = 8
 
         self.genome = YaacGenome(world, nb_internal_states=self.nb_internal_states)
+        self.grid = self.init_grid()
 
-        top, bottom, left, right = self.get_tb_lr()
-        self.world.world_tensor[RGB_CHANNELS+IR_UV_CHANNELS, top:bottom, left:right] += self.genome.physical_representation
+        top, bottom, left, right = self.get_bound()
+        self.world.world_tensor[:, top:bottom, left:right] += self.genome.world_imprint
+    
+    def init_grid(self):
+        size = self.genome.fov - 4 if isinstance(self.genome.brain, YaacBrainCNN) else self.genome.fov
+        grid = torch.meshgrid(torch.arange(size, device=DEVICE), torch.arange(size, device=DEVICE), indexing='ij')
+        grid = torch.stack(grid)
+        grid[0] = grid[0].flip(0)
+        grid -= self.genome.fov // 2
+
+        grid = grid.flip(0)
+        grid = grid.permute(1, 2, 0) * 1.
+
+        #divide each vector by its norm :
+        grid = grid / torch.norm(grid, dim=2, keepdim=True)
+
+        return grid
     
     def get_internal_state(self):
         return torch.tensor([
             self.stats.health,
             self.stats.energy,
             self.stats.hunger,
-            self.stats.max_health,
-            self.stats.max_energy,
-            self.stats.max_hunger,
-            self.stats.max_speed,
+            self.genome.max_health,
+            self.genome.max_energy,
+            self.genome.max_hunger,
+            self.genome.max_speed,
             self.stats.age
-        ])
+        ], device=DEVICE)
 
     def get_brain_output(self):
         view = self.world.get_fov(self.x, self.y, self.genome.fov)
@@ -247,25 +305,10 @@ class Yaac(MovingObject):
         return self.genome.brain(view, internal_state)
     
     def get_new_speed(self, speed_channel):
-        # TODO : the speed should have a constant norm and each pixel of the grid should be normalised.
-        # Otherwize, pixels far from the Yacc will be naturally more important than the ones close to it.
-
-        output_size = speed_channel.shape[1]
-        speed_channel = speed_channel.reshape(-1)
-        speed_weight = torch.softmax(speed_channel, dim=0)
-        speed_weight = speed_weight.reshape(output_size, output_size)
-
-        #get the grid of coordinates centered on the Yaac
-        grid = torch.meshgrid(torch.arange(output_size).to(DEVICE), torch.arange(output_size).to(DEVICE), indexing='ij')
-        grid = torch.stack(grid)
-        grid[0] = grid[0].flip(0)
-        grid -= self.genome.fov // 2
-
-        grid = grid.flip(0)
-        grid = grid.permute(1, 2, 0) * 1.
+        # TODO : mask the middle of the fov
         
         #new speed vector is the weighted sum of the grid
-        new_speed = torch.einsum('ijk,ij->k', grid, speed_weight)
+        new_speed = torch.einsum('ijk,ij->k', self.grid, speed_channel)
 
         return torch.tensor([1., 1.])
     
@@ -281,7 +324,7 @@ class Yaac(MovingObject):
 
         # TODO : get other actions from the other channels
 
-    def get_tb_lr(self):
+    def get_bound(self):
         top = int(self.y - OBJECT_RADIUS)
         bottom = int(self.y + OBJECT_RADIUS)
         left = int(self.x - OBJECT_RADIUS)
@@ -289,23 +332,52 @@ class Yaac(MovingObject):
         return top, bottom, left, right
     
     def release_pheromones(self):
-        top, bottom, left, right = self.get_tb_lr()
+        top, bottom, left, right = self.get_bound()
         self.world.world_tensor[PHEROMONE_CHANNELS, top:bottom, left:right] += self.genome.pheromones
     
     def world_move(self):
-        top, bottom, left, right = self.get_tb_lr()
+        top, bottom, left, right = self.get_bound()
         self.world.world_tensor[RGB_CHANNELS+IR_UV_CHANNELS, top:bottom, left:right] -= self.genome.physical_representation
 
         self.move()
 
-        top, bottom, left, right = self.get_tb_lr()
+        top, bottom, left, right = self.get_bound()
         self.world.world_tensor[RGB_CHANNELS+IR_UV_CHANNELS, top:bottom, left:right] += self.genome.physical_representation
     
     def update(self):
+        #print("\n\nYaac update\n")
+        #t1 = time.perf_counter()
         self.big_brain_time()
-        #self.world_move()
-        #self.release_pheromones()
+        #t2 = time.perf_counter()
+        #print("brain evaluation :", round((t2-t1)*1000, 5), "ms")
+
+        #t1 = time.perf_counter()
+        self.world_move()
+        #t2 = time.perf_counter()
+        #print("move :", round((t2-t1)*1000, 5), "ms")
+
+        #t1 = time.perf_counter()
+        self.release_pheromones()
+        #t2 = time.perf_counter()
+        #print("pheromones :", round((t2-t1)*1000, 5), "ms\n")
+
         self.stats.age += 1
-        self.stats.hunger += 1
+
         # TODO : energy cost depend on many things, like speed, size, etc.
-        self.stats.energy -= 1
+        cost = 0.1 # minimal energy cost just to stay alive
+        cost += self.speed * 0.2
+
+        self.stats.energy -= cost
+
+        if self.stats.energy <= 0:
+            self.stats.health -= 1
+            self.stats.energy = 0
+        
+        if self.stats.health <= 0:
+            self.die()
+        
+    def die(self):
+        top, bottom, left, right = self.get_bound()
+        self.world.world_tensor[:, top:bottom, left:right] -= self.genome.world_imprint
+        self.dead = True
+        #self.world.remove_yaac(self)
