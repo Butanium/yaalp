@@ -1,3 +1,5 @@
+use crate::plant::Plant;
+use crate::yaal::Yaal;
 use tch::Tensor;
 
 #[derive(Debug, Clone, Copy)]
@@ -23,6 +25,14 @@ impl<I: Copy> Position<I> {
         Position { x, y }
     }
 
+    pub fn x(&self) -> I {
+        self.x
+    }
+
+    pub fn y(&self) -> I {
+        self.y
+    }
+
     pub fn map<F, J>(&self, f: F) -> Position<J>
     where
         F: Fn(I) -> J,
@@ -34,114 +44,22 @@ impl<I: Copy> Position<I> {
     }
 }
 
-#[derive(Debug)]
-/// Represents an entity in the world.
-///
-/// An entity has a position (x, y) and a body, which is a tensor representing its shape.
-pub(crate) struct Entity {
-    side_length: i64,
-    position: Position<f64>,
-    body: Tensor,
+/// The simulation world
+pub struct World {
+    pub map: Tensor,
+    pub height: i64,
+    pub width: i64,
+    pub channels: i64,
+    pub decays: Tensor,
+    pub max_values: Tensor,
+    pub device: tch::Device,
+    pub val_type: tch::Kind,
+    pub max_field_of_view: i64,
+    pub yaals: Vec<Yaal>,
+    pub plants: Vec<Plant>,
 }
 
-/// The WorldObject trait is implemented for entities that can be added to the world.
-pub trait WorldObject<W> {
-    fn position(&self) -> Position<f64>;
-    fn set_position(&mut self, x: f64, y: f64);
-    fn world_pos(&self) -> Position<i64>;
-    fn add_to_map(&self, world: &W);
-}
-
-impl<'world> WorldObject<World<'world>> for Entity {
-    fn position(&self) -> Position<f64> {
-        self.position
-    }
-
-    fn set_position(&mut self, x: f64, y: f64) {
-        self.position.x = x;
-        self.position.y = y;
-    }
-
-    fn world_pos(&self) -> Position<i64> {
-        (
-            self.position.x.round() as i64,
-            self.position.y.round() as i64,
-        )
-            .into()
-    }
-
-    fn add_to_map(&self, world: &World<'world>) {
-        let mut view = world.get_submap(self.world_pos(), self.side_length);
-        view += &self.body;
-    }
-}
-
-/// WorldObject example
-pub(crate) struct Square(Entity);
-
-impl Square {
-    pub fn new(side_length: i64, world: &World) -> Self {
-        Square(Entity {
-            side_length,
-            position: Position::new(0., 0.),
-            body: Tensor::ones(
-                &[world.channels, side_length, side_length],
-                (world.val_type, world.device),
-            ),
-        })
-    }
-}
-
-impl<'world> WorldObject<World<'world>> for Square {
-    fn position(&self) -> Position<f64> {
-        self.0.position()
-    }
-
-    fn set_position(&mut self, x: f64, y: f64) {
-        self.0.set_position(x, y);
-    }
-
-    fn world_pos(&self) -> Position<i64> {
-        self.0.world_pos()
-    }
-
-    fn add_to_map(&self, world: &World) {
-        self.0.add_to_map(world)
-    }
-}
-
-pub(crate) struct World<'world> {
-    map: Tensor,
-    height: i64,
-    width: i64,
-    channels: i64,
-    decays: Tensor,
-    max_values: Tensor,
-    device: tch::Device,
-    val_type: tch::Kind,
-    max_field_of_view: i64,
-    entities: Vec<&'world dyn WorldObject<World<'world>>>,
-}
-
-/// Represents the game world.
-///
-/// The world map is a 3D tensor with dimensions (channels, height + 2 * max_field_of_view, width + 2 * max_field_of_view).
-/// Each channel represents a different aspect of the world (e.g. terrain, objects, enemies, etc.).
-/// The height and width represent the size of the world, and the max_field_of_view represents the maximum distance
-/// that an entity can see in each direction.
-///
-/// The world contains entities that implement the WorldObject trait, which allows them to be added to the world and interact with it.
-/// Entities have a position (x, y) and a body, which is a tensor representing their shape.
-///
-/// The world also contains decay and max value tensors, which determine how the values in the world decay over time and what their maximum values can be.
-///
-/// The World struct provides methods for adding entities to the world, getting views of the world from a certain position,
-/// and updating the values in the world based on the decay and max value tensors.
-impl<'world> World<'world> {
-    pub fn add_entity(&mut self, object: &'world dyn WorldObject<World<'world>>) {
-        self.entities.push(object);
-    }
-
+impl World {
     pub fn new(
         width: i64,
         height: i64,
@@ -180,65 +98,125 @@ impl<'world> World<'world> {
             device,
             val_type,
             max_field_of_view,
-            entities: vec![],
+            yaals: vec![],
+            plants: vec![],
         }
     }
 
-    /// Given a map with a certain field of view, get_view returns a tensor
-    /// that represents the view of the map from the given position.
-    ///
-    /// The tensor has dimensions (channels, 2 * field_of_view + 1, 2 * field_of_view + 1)
-    /// and contains the values of the map in the corresponding positions.
-    ///
-    /// For example, if the map is (max field of view = 2):
-    ///
-    /// 0 0 0 0 0 0 0
-    /// 0 0 0 0 0 0 0
-    /// 0 0 1 1 P 0 0
-    /// 0 0 1 2 1 0 0
-    /// 0 0 1 1 1 0 0
-    /// 0 0 0 0 0 0 0
-    /// 0 0 0 0 0 0 0
-    /// and the position is P (2,2) with a field of view of 1, then the tensor returned
-    /// will be:
-    ///
-    /// 0 0 0
-    /// 1 P 0
-    /// 2 1 0
-    ///
-    /// which corresponds to the view of the map from the position P with a field of view of 1.
-    pub fn get_observation(&self, position: Position<i64>, field_of_view: i64) -> Tensor {
-        self.map
-            .narrow(
-                1,
-                position.y + self.max_field_of_view - field_of_view,
-                2 * field_of_view + 1,
-            )
-            .narrow(
-                2,
-                position.x + self.max_field_of_view - field_of_view,
-                2 * field_of_view + 1,
-            )
+    /// Add a Yaal to the world
+    pub fn add_yaal(&mut self, yaal: Yaal) {
+        self.yaals.push(yaal);
     }
-    /// Returns a submap of which top left point is in position
-    /// The returned tensor has dimensions (channels, side_length, side_length).
-    pub fn get_submap(&self, position: Position<i64>, side_lenght: i64) -> Tensor {
+
+    /// Add a Plant to the world
+    pub fn add_plant(&mut self, plant: Plant) {
+        self.plants.push(plant);
+    }
+
+    /// Create random Yaals and Plants
+    pub fn create_yaals_and_plants(&mut self, num_yaals: i64, num_plants: i64) {
+        let min = Position::new(0.0, 0.0);
+        let max = Position::new(self.width as f32, self.height as f32);
+
+        for _ in 0..num_yaals {
+            let mut yaal = Yaal::random(
+                self.channels,
+                Position::new(0.0, 0.0),
+                self.device,
+                self.val_type,
+            );
+            yaal.set_random_position(&min, &max);
+            self.add_yaal(yaal);
+        }
+
+        for _ in 0..num_plants {
+            let mut plant = Plant::new(self.channels, self.device, self.val_type);
+            plant.set_random_position(&min, &max);
+            self.add_plant(plant);
+        }
+    }
+
+    /// Get the view for a Yaal at its position
+    pub fn get_view_for_yaal(&self, yaal: &Yaal) -> Tensor {
+        let top_left = yaal.top_left_position();
+        let view_size = yaal.genome.field_of_view * 2 + yaal.genome.size;
+
+        let y = (top_left.y().round() as i64).max(0).min(self.height);
+        let x = (top_left.x().round() as i64).max(0).min(self.width);
+
         self.map
-            .narrow(1, position.y + self.max_field_of_view, side_lenght)
-            .narrow(2, position.x + self.max_field_of_view, side_lenght)
+            .narrow(0, 0, self.channels)
+            .narrow(1, y, view_size)
+            .narrow(2, x, view_size)
+    }
+
+    /// Add a Yaal's body to the map
+    fn add_yaal_to_map(&mut self, yaal: &Yaal) {
+        let top_left = yaal.top_left_position();
+        let y = (top_left.y().round() as i64 + self.max_field_of_view)
+            .max(0)
+            .min(self.height + 2 * self.max_field_of_view - yaal.genome.size);
+        let x = (top_left.x().round() as i64 + self.max_field_of_view)
+            .max(0)
+            .min(self.width + 2 * self.max_field_of_view - yaal.genome.size);
+
+        let mut submap = self
+            .map
+            .narrow(0, 0, self.channels)
+            .narrow(1, y, yaal.genome.size)
+            .narrow(2, x, yaal.genome.size);
+
+        submap += &yaal.body;
+    }
+
+    /// Add a Plant's body to the map
+    fn add_plant_to_map(&mut self, plant: &Plant) {
+        let y = (plant.position.y().round() as i64 + self.max_field_of_view)
+            .max(0)
+            .min(self.height + 2 * self.max_field_of_view - plant.size());
+        let x = (plant.position.x().round() as i64 + self.max_field_of_view)
+            .max(0)
+            .min(self.width + 2 * self.max_field_of_view - plant.size());
+
+        let mut submap = self
+            .map
+            .narrow(0, 0, self.channels)
+            .narrow(1, y, plant.size())
+            .narrow(2, x, plant.size());
+
+        submap += &plant.body;
     }
 
     pub fn print(&self) {
-        self.map.print()
+        println!("World map (channels x height x width):");
+        self.map.print();
     }
 
-    /// Update the world
-    pub fn update(&mut self) {
+    /// Perform a simulation step
+    pub fn step(&mut self) {
+        // 1. Apply decay to the map
         self.map *= &self.decays;
-        // todo: update creatures
-        for creature in &self.entities {
-            creature.add_to_map(self)
+
+        // 2. Update all Yaals
+        for i in 0..self.yaals.len() {
+            let view = self.get_view_for_yaal(&self.yaals[i]);
+            self.yaals[i].update(&view);
+
+            // Bound position within world
+            let min = Position::new(0.0, 0.0);
+            let max = Position::new(self.width as f32, self.height as f32);
+            self.yaals[i].bound_position(&min, &max);
         }
-        self.map.clamp_max_tensor_(&self.max_values); // in place operation, result can safely be ignored
+
+        // 3. Add all entities to the map
+        for yaal in &self.yaals {
+            self.add_yaal_to_map(yaal);
+        }
+        for plant in &self.plants {
+            self.add_plant_to_map(plant);
+        }
+
+        // 4. Clamp values to max
+        let _ = self.map.clamp_max_tensor_(&self.max_values);
     }
 }

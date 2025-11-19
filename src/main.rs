@@ -1,9 +1,12 @@
 use notan::draw::*;
 use notan::prelude::*;
-use tch::Tensor;
+
+mod constants;
+mod plant;
 mod world;
+mod yaal;
+
 use crate::world::World;
-use crate::world::WorldObject;
 
 // #[notan_main] // uncomment to test notan window
 fn main() -> Result<(), String> {
@@ -13,30 +16,77 @@ fn main() -> Result<(), String> {
         tch::Device::Cpu
     };
     println!("Device used: {:?}", device);
-    // Create a dummy world
+    println!("Starting YAALP - Yet Another Artificial Life Project");
+    println!("====================================================\n");
+
+    // Create world with 6 channels:
+    // 0-2: RGB signature channels (for Yaal identification)
+    // 3-5: Resource/food channels (with diffusion)
+    let width = 100;
+    let height = 100;
+    let channels = 6;
+    let max_fov = 3;
+
+    // Decay factors: RGB channels don't decay, resource channels decay slowly
+    let decays = [1.0, 1.0, 1.0, 0.99, 0.98, 0.97];
+    // Max values: RGB capped at 1.0, resources can accumulate to 5.0
+    let max_values = [1.0, 1.0, 1.0, 5.0, 5.0, 5.0];
+
     let mut world = World::new(
-        3,
-        3,
-        2,
-        1,
-        &[0.5, 0.9],
-        &[10., 10.],
+        width,
+        height,
+        channels,
+        max_fov,
+        &decays,
+        &max_values,
         device,
         tch::Kind::Float,
     );
-    // Create some dummy creatures
-    let square = world::Square::new(2, &world);
-    let mut square2 = world::Square::new(2, &world);
-    square2.set_position(1., 1.);
-    world.add_entity(&square);
-    world.add_entity(&square2);
-    world.print();
-    for _ in 0..10 {
-        world.update();
-        println!("\nAfter update:");
-        world.print();
+
+    println!(
+        "Created world: {}x{} with {} channels",
+        width, height, channels
+    );
+
+    // Create some Yaals and Plants
+    let num_yaals = 10;
+    let num_plants = 20;
+    world.create_yaals_and_plants(num_yaals, num_plants);
+
+    println!("Spawned {} Yaals and {} Plants\n", num_yaals, num_plants);
+
+    // Run simulation
+    let timesteps = 100;
+    println!("Running simulation for {} timesteps...\n", timesteps);
+
+    for t in 0..timesteps {
+        world.step();
+
+        // Print progress every 10 steps
+        if t % 10 == 0 {
+            println!("Step {}/{}", t, timesteps);
+            println!(
+                "  Alive Yaals: {} | Plants: {}",
+                world.yaals.len(),
+                world.plants.len()
+            );
+
+            // Show first Yaal's position if any exist
+            if let Some(yaal) = world.yaals.first() {
+                println!(
+                    "  First Yaal at ({:.1}, {:.1})",
+                    yaal.position.x(),
+                    yaal.position.y()
+                );
+            }
+        }
     }
-    // This code block is missing a return statement, so we will add a dummy return value
+
+    println!("\n✓ Simulation complete!");
+    println!("Final statistics:");
+    println!("  Total Yaals: {}", world.yaals.len());
+    println!("  Total Plants: {}", world.plants.len());
+
     Ok(())
     // notan::init().draw(draw).add_config(DrawConfig).build()
 }
