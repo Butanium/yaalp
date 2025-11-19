@@ -56,36 +56,115 @@ fn main() -> Result<(), String> {
     println!("Spawned {} Yaals and {} Plants\n", num_yaals, num_plants);
 
     // Run simulation
-    let timesteps = 100;
+    let timesteps = 200;
     println!("Running simulation for {} timesteps...\n", timesteps);
 
+    let mut total_deaths = 0;
+    let mut total_births = 0;
+    let mut total_food_consumed = 0;
+
     for t in 0..timesteps {
+        let yaals_before = world.yaals.len();
+        let plants_before = world.plants.len();
+
         world.step();
 
-        // Print progress every 10 steps
-        if t % 10 == 0 {
-            println!("Step {}/{}", t, timesteps);
+        let yaals_after = world.yaals.len();
+        let plants_after = world.plants.len();
+
+        // Calculate births and deaths
+        let net_change = (yaals_after as i64) - (yaals_before as i64);
+        let births_this_step = if net_change > 0 {
+            net_change as usize
+        } else {
+            0
+        };
+        let deaths_this_step = if net_change < 0 {
+            (-net_change) as usize
+        } else {
+            0
+        };
+
+        let food_consumed_this_step = plants_before.saturating_sub(plants_after);
+
+        total_births += births_this_step;
+        total_deaths += deaths_this_step;
+        total_food_consumed += food_consumed_this_step;
+
+        // Print progress every 20 steps
+        if t % 20 == 0 || yaals_after == 0 {
+            println!("\n━━━ Step {}/{} ━━━", t, timesteps);
             println!(
-                "  Alive Yaals: {} | Plants: {}",
-                world.yaals.len(),
-                world.plants.len()
+                "  🦠 Alive Yaals: {} | 🌱 Plants: {}",
+                yaals_after, plants_after
             );
 
-            // Show first Yaal's position if any exist
-            if let Some(yaal) = world.yaals.first() {
+            if yaals_after > 0 {
+                // Calculate average energy and health
+                let total_energy: f32 = world.yaals.iter().map(|y| y.energy).sum();
+                let total_health: f32 = world.yaals.iter().map(|y| y.health).sum();
+                let avg_energy = total_energy / yaals_after as f32;
+                let avg_health = total_health / yaals_after as f32;
+                let avg_age: i64 =
+                    world.yaals.iter().map(|y| y.age).sum::<i64>() / yaals_after as i64;
+
                 println!(
-                    "  First Yaal at ({:.1}, {:.1})",
-                    yaal.position.x(),
-                    yaal.position.y()
+                    "  📊 Avg Energy: {:.1} | Avg Health: {:.1} | Avg Age: {}",
+                    avg_energy, avg_health, avg_age
                 );
+
+                // Show healthiest Yaal
+                if let Some(healthiest) = world
+                    .yaals
+                    .iter()
+                    .max_by(|a, b| a.energy.partial_cmp(&b.energy).unwrap())
+                {
+                    println!(
+                        "  🏆 Healthiest Yaal: Energy={:.1}, Age={}, Pos=({:.1}, {:.1})",
+                        healthiest.energy,
+                        healthiest.age,
+                        healthiest.position.x(),
+                        healthiest.position.y()
+                    );
+                }
+
+                if deaths_this_step > 0 {
+                    println!("  ⚠️  {} Yaals died this period", deaths_this_step);
+                }
+                if births_this_step > 0 {
+                    println!("  🎉 {} new Yaals born!", births_this_step);
+                }
+            } else {
+                println!("  ☠️  All Yaals have died!");
+                break;
             }
         }
     }
 
-    println!("\n✓ Simulation complete!");
+    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("✓ Simulation complete!");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Final statistics:");
-    println!("  Total Yaals: {}", world.yaals.len());
-    println!("  Total Plants: {}", world.plants.len());
+    println!(
+        "  Survivors: {}/{} Yaals (started with {})",
+        world.yaals.len(),
+        num_yaals + total_births,
+        num_yaals
+    );
+    println!("  Total births: {} 🎉", total_births);
+    println!("  Total deaths: {} ⚰️", total_deaths);
+    println!("  Plants remaining: {} 🌱", world.plants.len());
+    println!("  Total food consumed: {} 🍽️", total_food_consumed);
+
+    if world.yaals.is_empty() {
+        println!("\n  Population went extinct! 💀");
+    } else {
+        let oldest = world.yaals.iter().max_by_key(|y| y.age).unwrap();
+        println!("\n  Oldest survivor: Age {}", oldest.age);
+        let avg_energy: f32 =
+            world.yaals.iter().map(|y| y.energy).sum::<f32>() / world.yaals.len() as f32;
+        println!("  Average energy: {:.1}", avg_energy);
+    }
 
     Ok(())
     // notan::init().draw(draw).add_config(DrawConfig).build()

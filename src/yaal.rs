@@ -110,6 +110,38 @@ impl YaalGenome {
         }
     }
 
+    /// Clone genome with small mutations
+    pub fn clone_with_mutation(&self) -> Self {
+        let mut rng = rand::thread_rng();
+        let mutation_rate = 0.1;
+
+        // Mutate brain weights
+        let mutated_weights = &self.brain.direction_weights
+            + &Tensor::randn_like(&self.brain.direction_weights) * mutation_rate;
+        let mutated_brain = YaalMLP {
+            direction_weights: mutated_weights,
+        };
+
+        // Slightly mutate other parameters
+        let max_speed = (self.max_speed + rng.gen_range(-0.05..0.05))
+            .clamp(constants::yaal::MIN_SPEED, constants::yaal::MAX_SPEED);
+
+        // Signature inherits from parent with slight variation
+        let signature = self
+            .signature
+            .iter()
+            .map(|&v| (v + rng.gen_range(-0.1..0.1)).clamp(0.0, 1.0))
+            .collect();
+
+        YaalGenome {
+            brain: mutated_brain,
+            max_speed,
+            field_of_view: self.field_of_view, // Keep same FOV
+            size: self.size,                   // Keep same size
+            signature,
+        }
+    }
+
     /// Generate body tensor from genome
     pub fn generate_body(
         &self,
@@ -142,16 +174,30 @@ pub struct Yaal {
     pub direction: Position<f32>,
     pub genome: YaalGenome,
     pub body: Tensor,
+    pub energy: f32,
+    pub max_energy: f32,
+    pub health: f32,
+    pub max_health: f32,
+    pub age: i64,
 }
 
 impl Yaal {
     /// Create a new Yaal with given genome and position
     pub fn new(position: Position<f32>, genome: YaalGenome, body: Tensor) -> Self {
+        let size_factor = genome.size as f32;
+        let max_energy = 100.0 * size_factor;
+        let max_health = 100.0 * size_factor;
+
         Yaal {
             position,
             direction: Position::new(0.0, 0.0),
             genome,
             body,
+            energy: max_energy * 0.8, // Start with 80% energy
+            max_energy,
+            health: max_health,
+            max_health,
+            age: 0,
         }
     }
 
@@ -167,18 +213,83 @@ impl Yaal {
         Self::new(position, genome, body)
     }
 
+    /// Check if the Yaal is alive
+    pub fn is_alive(&self) -> bool {
+        self.energy > 0.0 && self.health > 0.0
+    }
+
+    /// Consume energy for movement and living
+    fn consume_energy(&mut self, amount: f32) {
+        self.energy = (self.energy - amount).max(0.0);
+
+        // If energy is too low, start losing health
+        if self.energy < 10.0 {
+            self.health = (self.health - 1.0).max(0.0);
+        }
+    }
+
+    /// Eat food and gain energy
+    pub fn eat(&mut self, food_value: f32) {
+        self.energy = (self.energy + food_value).min(self.max_energy);
+
+        // Eating also restores a bit of health
+        if self.health < self.max_health {
+            self.health = (self.health + food_value * 0.1).min(self.max_health);
+        }
+    }
+
+    /// Check if Yaal can reproduce
+    pub fn can_reproduce(&self) -> bool {
+        self.energy > self.max_energy * 0.7 && self.age > 10
+    }
+
+    /// Reproduce and create offspring (asexual reproduction with mutation)
+    pub fn reproduce(&mut self, num_channels: i64) -> Option<Yaal> {
+        if !self.can_reproduce() {
+            return None;
+        }
+
+        // Reproduction costs energy
+        let reproduction_cost = self.max_energy * 0.4;
+        self.energy -= reproduction_cost;
+
+        // Create offspring with slightly mutated genome
+        let mut offspring_genome = self.genome.clone_with_mutation();
+        let offspring_body =
+            offspring_genome.generate_body(num_channels, self.body.device(), self.body.kind());
+
+        // Offspring starts near parent
+        let mut rng = rand::thread_rng();
+        let offset_x = rng.gen_range(-5.0..5.0);
+        let offset_y = rng.gen_range(-5.0..5.0);
+        let offspring_pos =
+            Position::new(self.position.x() + offset_x, self.position.y() + offset_y);
+
+        Some(Yaal::new(offspring_pos, offspring_genome, offspring_body))
+    }
+
     /// Update the Yaal based on its view of the environment
     pub fn update(&mut self, input_view: &Tensor) {
+        self.age += 1;
+
         let view_size = self.genome.field_of_view * 2 + self.genome.size;
         let decision = self.genome.brain.evaluate(input_view, view_size, view_size);
 
-        // Update position based on decision
+        // Calculate energy cost based on movement and size
         let speed = self.genome.max_speed * decision.speed_factor * constants::DELTA_T;
-        self.position = Position::new(
-            self.position.x() + decision.direction.x() * speed,
-            self.position.y() + decision.direction.y() * speed,
-        );
-        self.direction = decision.direction;
+        let movement_cost = speed * (self.genome.size as f32) * 0.1;
+        let living_cost = 0.5; // Base metabolic cost
+
+        self.consume_energy(movement_cost + living_cost);
+
+        // Only move if alive
+        if self.is_alive() {
+            self.position = Position::new(
+                self.position.x() + decision.direction.x() * speed,
+                self.position.y() + decision.direction.y() * speed,
+            );
+            self.direction = decision.direction;
+        }
     }
 
     /// Get the top-left position of the Yaal's body

@@ -192,6 +192,74 @@ impl World {
         self.map.print();
     }
 
+    /// Check if a Yaal overlaps with a plant and consume it
+    fn check_food_consumption(&mut self) {
+        let mut consumed_plants = Vec::new();
+
+        for (i, yaal) in self.yaals.iter_mut().enumerate() {
+            for (j, plant) in self.plants.iter().enumerate() {
+                // Simple distance-based collision
+                let dx = yaal.position.x() - plant.position.x();
+                let dy = yaal.position.y() - plant.position.y();
+                let dist_sq = dx * dx + dy * dy;
+                let collision_dist = (yaal.genome.size as f32 / 2.0 + plant.size() as f32 / 2.0);
+
+                if dist_sq < collision_dist * collision_dist {
+                    // Yaal eats the plant!
+                    yaal.eat(20.0); // Plants provide 20 energy
+                    consumed_plants.push(j);
+                }
+            }
+        }
+
+        // Remove consumed plants (in reverse order to avoid index issues)
+        consumed_plants.sort_unstable();
+        consumed_plants.dedup();
+        for &idx in consumed_plants.iter().rev() {
+            self.plants.remove(idx);
+        }
+    }
+
+    /// Remove dead Yaals
+    fn remove_dead_yaals(&mut self) -> usize {
+        let initial_count = self.yaals.len();
+        self.yaals.retain(|yaal| yaal.is_alive());
+        initial_count - self.yaals.len()
+    }
+
+    /// Randomly spawn new plants
+    fn spawn_plants(&mut self, count: i64) {
+        use rand::Rng;
+        let min = Position::new(0.0, 0.0);
+        let max = Position::new(self.width as f32, self.height as f32);
+
+        for _ in 0..count {
+            let mut plant = Plant::new(self.channels, self.device, self.val_type);
+            plant.set_random_position(&min, &max);
+            self.add_plant(plant);
+        }
+    }
+
+    /// Handle reproduction
+    fn handle_reproduction(&mut self) {
+        let mut offspring = Vec::new();
+
+        for yaal in &mut self.yaals {
+            if let Some(child) = yaal.reproduce(self.channels) {
+                offspring.push(child);
+            }
+        }
+
+        // Add offspring to the world
+        for mut child in offspring {
+            // Bound position within world
+            let min = Position::new(0.0, 0.0);
+            let max = Position::new(self.width as f32, self.height as f32);
+            child.bound_position(&min, &max);
+            self.yaals.push(child);
+        }
+    }
+
     /// Perform a simulation step
     pub fn step(&mut self) {
         // 1. Apply decay to the map
@@ -208,7 +276,24 @@ impl World {
             self.yaals[i].bound_position(&min, &max);
         }
 
-        // 3. Add all entities to the map
+        // 3. Check for food consumption
+        self.check_food_consumption();
+
+        // 4. Handle reproduction
+        self.handle_reproduction();
+
+        // 5. Remove dead Yaals
+        let _ = self.remove_dead_yaals();
+
+        // 6. Spawn new plants occasionally (to maintain ecosystem)
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        if rng.gen::<f32>() < 0.15 {
+            // 15% chance each step
+            self.spawn_plants(1);
+        }
+
+        // 7. Add all entities to the map
         for yaal in &self.yaals {
             self.add_yaal_to_map(yaal);
         }
@@ -216,7 +301,7 @@ impl World {
             self.add_plant_to_map(plant);
         }
 
-        // 4. Clamp values to max
+        // 8. Clamp values to max
         let _ = self.map.clamp_max_tensor_(&self.max_values);
     }
 }
